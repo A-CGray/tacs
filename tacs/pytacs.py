@@ -30,9 +30,11 @@ import warnings
 from functools import wraps
 
 import numpy as np
+import pyNastran.bdf as pn
 
 import tacs.TACS
 import tacs.constitutive
+import tacs.constraints
 import tacs.elements
 import tacs.functions
 import tacs.problems
@@ -222,6 +224,9 @@ class pyTACS(BaseUI):
         self.Xpts0 = None
         # List of initial designvars
         self.x0 = None
+        # Design var upper/lower-bounds
+        self.xub = None
+        self.xlb = None
 
         # Variables per node for model
         self.varsPerNode = None
@@ -785,6 +790,11 @@ class pyTACS(BaseUI):
         self.x0 = self.assembler.createDesignVec()
         self.assembler.getDesignVars(self.x0)
 
+        # Store design variable upper/lower-bounds
+        self.xub = self.assembler.createDesignVec()
+        self.xlb = self.assembler.createDesignVec()
+        self.assembler.getDesignVarRange(self.xlb, self.xub)
+
     def _elemCallBackFromBDF(self):
         """
         Automatically setup elemCallBack using information contained in BDF file.
@@ -960,7 +970,7 @@ class pyTACS(BaseUI):
 
                 # if the laminate is symmetric, mirror the ply indices
                 if propInfo.lam == "SYM":
-                    plyIndices = list(range(numPlies / 2))
+                    plyIndices = list(range(numPlies // 2))
                     plyIndices.extend(plyIndices[::-1])
                 else:
                     plyIndices = range(numPlies)
@@ -1153,6 +1163,21 @@ class pyTACS(BaseUI):
 
         """
         return self.x0.getArray().copy()
+
+    @postinitialize_method
+    def getDesignVarRange(self):
+        """
+        get the lower/upper bounds for the design variables.
+
+        Returns
+        ----------
+        xlb : numpy.ndarray
+            The design variable lower bound.
+        xub : numpy.ndarray
+            The design variable upper bound.
+
+        """
+        return self.xlb.getArray().copy(), self.xub.getArray().copy()
 
     @postinitialize_method
     def createDesignVec(self, asBVec=False):
@@ -1536,6 +1561,346 @@ class pyTACS(BaseUI):
             structProblems[subCase.id] = problem
 
         return structProblems
+
+    def writeBDF(self, fileName, problems):
+        """
+        Write NASTRAN BDF file from problem class.
+        Assumes all supplied Problems share the same nodal and design variable values.
+
+        NOTE: Only supports writing loads from StaticProblem types.
+
+        Parameters
+        ----------
+        fileName: str
+            Name of file to write BDF file to.
+        problems: TACSProblem or list[TACSProblem]
+            List of pytacs Problem classes to write BDF file from.
+        """
+        # Make sure problems is in a list
+        if hasattr(problems, "__iter__") == False:
+            problems = [problems]
+        elif isinstance(problems, dict):
+            problems = list(problems.values())
+        else:
+            problems = list(problems)
+
+        # Check that each problem was created by this pyTACS instance
+        for problem in problems:
+            if problem.assembler != self.assembler:
+                raise self._TACSError(
+                    f"This problem instance ({problem.name}) is not associated with this instance of pyTACS."
+                )
+
+        # Make sure design variables are up-to-date
+        x_bvec = self.createDesignVec(asBVec=True)
+        x_bvec.getArray()[:] = problems[0].getDesignVars()
+        self.assembler.setDesignVars(x_bvec)
+
+        # Get local node info for each processor
+        multNodes = self.getLocalMultiplierNodeIDs()
+        globalToLocalNodeIDDict = self.meshLoader.getGlobalToLocalNodeIDDict()
+        Xpts_bvec = np.real(problems[0].getNodes())
+
+        # Gather local info to root processor
+        allMultNodes = self.comm.gather(multNodes, root=0)
+        allGlobalToLocalNodeIDDict = self.comm.gather(globalToLocalNodeIDDict, root=0)
+        allXpts = self.comm.gather(Xpts_bvec, root=0)
+
+        # Assemble new BDF file for mesh on root
+        if self.comm.rank == 0:
+            newBDFInfo = pn.bdf.BDF(debug=False)
+
+            # Write out updated node locations
+            nastranNodeIDs = list(self.bdfInfo.node_ids)
+            # Loop through each proc and pull out new node locations
+            for proc_i in range(self.comm.size):
+                xyz = allXpts[proc_i].reshape(-1, 3)
+                for tacsGNodeID in allGlobalToLocalNodeIDDict[proc_i]:
+                    # Get local node ID
+                    tacsLNodeID = allGlobalToLocalNodeIDDict[proc_i][tacsGNodeID]
+                    # Get Global nastran ID
+                    nastranGNodeID = nastranNodeIDs[tacsGNodeID]
+                    # Add node to bdf file (if its not a multiplier node)
+                    if tacsLNodeID not in allMultNodes[proc_i]:
+                        newBDFInfo.add_grid(nastranGNodeID, xyz[tacsLNodeID])
+
+            # Copy over boundary conditions
+            # Set all con IDs to one
+            newBDFInfo.spcs[1] = []
+            for spcID in self.bdfInfo.spcs:
+                for spcCard in self.bdfInfo.spcs[spcID]:
+                    newCard = copy.deepcopy(spcCard)
+                    newCard.conid = 1
+                    newBDFInfo.spcs[1].append(newCard)
+
+            # Write updated properties and elements
+            transObjs = {}
+            matObjs = []
+            conObjs = []
+            for compID, propID in enumerate(self.bdfInfo.properties):
+                # Get TACS element object
+                elemObj = self.meshLoader.getElementObject(compID, 0)
+                # Get TACS constitutive object for element (if applicable)
+                conObj = elemObj.getConstitutive()
+                if conObj is not None:
+                    # Set the property ID number for the class to be used in the Nastran card
+                    conObj.setNastranID(propID)
+                    conObjs.append(conObj)
+                    # Get TACS material properties object for constitutive (if applicable)
+                    matObj = conObj.getMaterialProperties()
+                    # May be a single object...
+                    if isinstance(matObj, tacs.constitutive.MaterialProperties):
+                        if matObj not in matObjs:
+                            matObjs.append(matObj)
+                    # or a list (plys for composite classes)
+                    elif isinstance(matObj, list):
+                        for mat_i in matObj:
+                            if mat_i not in matObjs:
+                                matObjs.append(mat_i)
+                # Get TACS transform object for element (if applicable)
+                transObj = elemObj.getTransform()
+                if transObj is not None:
+                    transObjs[compID] = transObj
+
+            # Write material cards from TACS MaterialProperties class
+            for i, matObj in enumerate(matObjs):
+                matID = i + 1
+                matObj.setNastranID(matID)
+                newBDFInfo.materials[matID] = matObj.generateBDFCard()
+
+            # Write property/element cards from TACSConstitutive/TACSElement classes
+            curCoordID = 1
+            for compID, conObj in enumerate(conObjs):
+                propID = conObj.getNastranID()
+                propCard = conObj.generateBDFCard()
+                if propCard is not None:
+                    # Copy property comment (may include component name info)
+                    # Make sure to remove comment `$` from string
+                    propCard.comment = self.bdfInfo.properties[propID].comment[1:]
+                    # Add property card to BDF
+                    newBDFInfo.properties[propID] = propCard
+                elemIDs = self.meshLoader.getGlobalElementIDsForComps(
+                    [compID], nastranOrdering=True
+                )
+                # Convert any transform objects to nastran COORD2R cards, if necessary
+                transObj = transObjs.get(compID, None)
+                if isinstance(
+                    transObj, tacs.elements.ShellRefAxisTransform
+                ) or isinstance(transObj, tacs.elements.SpringRefFrameTransform):
+                    coordID = curCoordID
+                    origin = np.zeros(3)
+                    if isinstance(transObj, tacs.elements.SpringRefFrameTransform):
+                        vec1, vec2 = transObj.getRefAxes()
+                    else:
+                        vec1 = transObj.getRefAxis()
+                        vec2 = np.random.random(3)
+                    newBDFInfo.add_cord2r(coordID, origin, np.real(vec1), np.real(vec2))
+                    curCoordID += 1
+                # We just need the ref vector for these types
+                elif isinstance(
+                    transObj, tacs.elements.BeamRefAxisTransform
+                ) or isinstance(transObj, tacs.elements.SpringRefAxisTransform):
+                    vec = transObj.getRefAxis()
+                    vec = np.real(vec)
+                # Otherwise, there's no transform associated with this element, use default
+                else:
+                    coordID = None
+                # Copy and update element cards
+                for elemID in elemIDs:
+                    # Create copy of card
+                    newCard = copy.deepcopy(self.bdfInfo.elements[elemID])
+                    # Copy element comment (may include component name info)
+                    # Make sure to remove comment `$` from string
+                    newCard.comment = self.bdfInfo.elements[elemID].comment[1:]
+                    # Update element coordinate frame info, if necessary
+                    if "CQUAD" in newCard.type or "CTRI" in newCard.type:
+                        newCard.theta_mcid = coordID
+                    elif "CBAR" in newCard.type:
+                        newCard.x = vec
+                        newCard.g0 = None
+                    elif "CBEAM" in newCard.type:
+                        newCard.x = vec
+                        newCard.g0 = None
+                        if propCard.type != "PBEAM":
+                            # TACS wrote out a PBAR card that we must convert
+                            newPropCard = (
+                                pn.cards.properties.beam.PBEAM_init_from_empty()
+                            )
+                            newPropCard.A[0] = propCard.Area()
+                            newPropCard.i1[0] = propCard.I11()
+                            newPropCard.i2[0] = propCard.I22()
+                            newPropCard.i12[0] = propCard.I12()
+                            if hasattr(propCard, "J"):
+                                newPropCard.j[0] = propCard.J()
+                            else:
+                                newPropCard.j[0] = propCard.j
+                            newPropCard.comment = propCard.comment
+                            propCard = newPropCard
+                    elif "CROD" in newCard.type and propCard.type != "PROD":
+                        # TACS wrote out a PBAR card that we must convert
+                        if hasattr(propCard, "J"):
+                            J = propCard.J()
+                        else:
+                            J = propCard.j
+                        newPropCard = pn.cards.properties.rods.PROD(
+                            propCard.pid, propCard.mid, propCard.Area(), J
+                        )
+                        newBDFInfo.properties[propID] = newPropCard
+                        newPropCard.comment = propCard.comment
+                        propCard = newPropCard
+                    elif newCard.type == "CBUSH":
+                        if isinstance(transObj, tacs.elements.SpringRefAxisTransform):
+                            newCard.x = vec
+                            newCard.g0 = None
+                        else:
+                            newCard.cid = coordID
+                    # Add element card to bdf
+                    newBDFInfo.elements[elemID] = newCard
+
+            # Copy over masses elements
+            for massCard in self.bdfInfo.masses.values():
+                elemID = massCard.eid
+                # We'll have to create a new CONM2 card in case the point mass is associated with tacs dvs
+                if massCard.type == "CONM2":
+                    nodeID = massCard.nid
+                    elemObj = self.meshLoader.getElementObjectForElemID(
+                        elemID, nastranOrdering=True
+                    )
+                    conObj = elemObj.getConstitutive()
+                    M = conObj.evalMassMatrix()
+                    mass = np.real(M[0])
+                    I11 = np.real(M[15])
+                    I22 = np.real(M[18])
+                    I33 = np.real(M[20])
+                    # Nastran uses negative convention for POI's
+                    I12 = -np.real(M[16])
+                    I13 = -np.real(M[17])
+                    I23 = -np.real(M[19])
+                    newBDFInfo.add_conm2(
+                        elemID, nodeID, mass, I=[I11, I12, I22, I13, I23, I33]
+                    )
+                # CONM1's can't be updated by TACS, so we can just copy the original value
+                else:
+                    newBDFInfo.masses[elemID] = copy.deepcopy(massCard)
+                # Copy over comments
+                newBDFInfo.masses[elemID].comment = massCard.comment
+
+            # Copy over rigid elements
+            newBDFInfo.rigid_elements.update(self.bdfInfo.rigid_elements)
+
+            # Add case control deck for loads
+            caseConLines = [
+                "TITLE = TACS Analysis Set",
+                "ECHO = NONE",
+                "DISPLACEMENT(PLOT) = ALL",
+                "SPCFORCE(PLOT) = ALL",
+                "OLOAD(PLOT) = ALL",
+                "FORCE(PLOT,CORNER) = ALL",
+                "STRESS(PLOT,CORNER) = ALL",
+                "SPC = 1",
+            ]
+            newBDFInfo.case_control_deck = pn.case_control_deck.CaseControlDeck(
+                caseConLines
+            )
+            # Set solution type to static (101)
+            newBDFInfo.sol = 101
+
+        else:
+            newBDFInfo = None
+
+        # All procs should wait for root
+        self.comm.barrier()
+
+        # Append forces from problem classes
+        for i, problem in enumerate(problems):
+            if isinstance(problem, tacs.problems.StaticProblem):
+                loadCase = i + 1
+                problem.writeLoadToBDF(newBDFInfo, loadCase)
+
+        # Write out BDF file
+        if self.comm.rank == 0:
+            newBDFInfo.write_bdf(
+                fileName, size=16, is_double=True, write_header=False, enddata=True
+            )
+
+        # All procs should wait for root
+        self.comm.barrier()
+
+    @postinitialize_method
+    def createAdjacencyConstraint(self, name, options={}):
+        """
+        Create a new AdjacencyConstraint for calculating
+        design variable differences across adjacent components.
+        This constraint can be used to ensure that the design variables
+        do not change too abruptly across components.
+        The formulation is a linear constraint that takes the following form:
+
+        c = dv_i - dv_j
+
+        Where dv_i and dv_j are two design variables in adjacent components.
+
+        Parameters
+        ----------
+        name : str
+            Name to assign constraint.
+        options : dict
+            Class-specific options to pass to AdjacencyConstraint instance (case-insensitive).
+
+        Returns
+        ----------
+        constraint : AdjacencyConstraint
+            AdjacencyConstraint object used for calculating constraints.
+        """
+        constr = tacs.constraints.AdjacencyConstraint(
+            name,
+            self.assembler,
+            self.comm,
+            self.outputViewer,
+            self.meshLoader,
+            options,
+        )
+        # Set with original design vars and coordinates, in case they have changed
+        constr.setDesignVars(self.x0)
+        constr.setNodes(self.Xpts0)
+        return constr
+
+    @postinitialize_method
+    def createDVConstraint(self, name, options={}):
+        """
+        Create a new DVConstraint for calculating linear constraints based
+        on design variables within the same component.
+
+        The constraints are of the form:
+
+            c = a_0 * dv_0 + a_1 * dv_1 + ... + a_n * dv_n
+
+        Where which design variables to include (dv_0, dv_1, etc.)
+        and the corresponding weights (a_0, a_1, etc.) are defined by the user.
+
+        Parameters
+        ----------
+        name : str
+            Name to assign constraint.
+        options : dict
+            Class-specific options to pass to DVConstraint instance (case-insensitive).
+
+        Returns
+        ----------
+        constraint : DVConstraint
+            DVConstraint object used for calculating constraints.
+        """
+        constr = tacs.constraints.DVConstraint(
+            name,
+            self.assembler,
+            self.comm,
+            self.outputViewer,
+            self.meshLoader,
+            options,
+        )
+        # Set with original design vars and coordinates, in case they have changed
+        constr.setDesignVars(self.x0)
+        constr.setNodes(self.Xpts0)
+        return constr
 
     def getNumComponents(self):
         """
