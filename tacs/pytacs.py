@@ -37,7 +37,7 @@ import tacs.elements
 import tacs.functions
 import tacs.problems
 from tacs.pymeshloader import pyMeshLoader
-from .utilities import BaseUI
+from tacs.utilities import BaseUI
 
 warnings.simplefilter("default")
 
@@ -79,6 +79,8 @@ class pyTACS(BaseUI):
 
     # Default class options
     defaultOptions = {
+        # TODO: Figure out a way to automatically figure out if model is nonlinear so we can remove this option
+        "isNonlinear": [bool, False, "Flag for whether the model is nonlinear."],
         # Meshloader options
         "printDebug": [
             bool,
@@ -227,6 +229,9 @@ class pyTACS(BaseUI):
         # TACS assembler object
         self.assembler = None
 
+        # Nonlinear flag
+        self._isNonlinear = self.getOption("isNonlinear")
+
         initFinishTime = time.time()
         if self.getOption("printTiming"):
             self._pp("+--------------------------------------------------+")
@@ -254,6 +259,11 @@ class pyTACS(BaseUI):
                 % ("TACS Total Initialization Time", initFinishTime - startTime)
             )
             self._pp("+--------------------------------------------------+")
+
+    @property
+    def isNonlinear(self):
+        """The public interface for the isNonlinear attribute. Implemented as a property so that it is read-only."""
+        return self._isNonlinear
 
     @preinitialize_method
     def addGlobalDV(self, descript, value, lower=None, upper=None, scale=1.0):
@@ -1292,7 +1302,7 @@ class pyTACS(BaseUI):
             array[:] = vec.getArray()
 
     @postinitialize_method
-    def createStaticProblem(self, name, options={}):
+    def createStaticProblem(self, name, options=None):
         """
         Create a new staticProblem for modeling a static load cases.
         This object can be used to set loads, evalFunctions as well as perform
@@ -1311,7 +1321,13 @@ class pyTACS(BaseUI):
             StaticProblem object used for modeling and solving static cases.
         """
         problem = tacs.problems.static.StaticProblem(
-            name, self.assembler, self.comm, self.outputViewer, self.meshLoader, options
+            name,
+            self.assembler,
+            self.comm,
+            self.outputViewer,
+            self.meshLoader,
+            self.isNonlinear,
+            options,
         )
         # Set with original design vars and coordinates, in case they have changed
         problem.setDesignVars(self.x0)
@@ -1319,7 +1335,7 @@ class pyTACS(BaseUI):
         return problem
 
     @postinitialize_method
-    def createTransientProblem(self, name, tInit, tFinal, numSteps, options={}):
+    def createTransientProblem(self, name, tInit, tFinal, numSteps, options=None):
         """
         Create a new TransientProblem for modeling a transient load cases.
         This object can be used to set loads, evalFunctions as well as perform
@@ -1352,6 +1368,7 @@ class pyTACS(BaseUI):
             self.comm,
             self.outputViewer,
             self.meshLoader,
+            self.isNonlinear,
             options,
         )
         # Set with original design vars and coordinates, in case they have changed
@@ -1360,7 +1377,7 @@ class pyTACS(BaseUI):
         return problem
 
     @postinitialize_method
-    def createModalProblem(self, name, sigma, numEigs, options={}):
+    def createModalProblem(self, name, sigma, numEigs, options=None):
         """
         Create a new ModalProblem for performing modal analysis.
         This problem can be used to identify the natural frequencies and mode
@@ -1391,6 +1408,7 @@ class pyTACS(BaseUI):
             self.comm,
             self.outputViewer,
             self.meshLoader,
+            self.isNonlinear,
             options,
         )
         # Set with original design vars and coordinates, in case they have changed

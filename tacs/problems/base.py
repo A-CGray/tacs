@@ -11,7 +11,7 @@ import numpy as np
 from mpi4py import MPI
 
 import tacs.TACS
-from ..utilities import BaseUI
+from tacs.utilities import BaseUI
 
 
 class TACSProblem(BaseUI):
@@ -20,8 +20,15 @@ class TACSProblem(BaseUI):
     """
 
     def __init__(
-        self, assembler, comm=None, options=None, outputViewer=None, meshLoader=None
+        self,
+        assembler,
+        comm=None,
+        options=None,
+        outputViewer=None,
+        meshLoader=None,
+        isNonlinear=False,
     ):
+        self._isNonlinear = isNonlinear
         # TACS assembler object
         self.assembler = assembler
         # TACS F5 output writer
@@ -47,6 +54,11 @@ class TACSProblem(BaseUI):
         BaseUI.__init__(self, options=options, comm=comm)
 
         return
+
+    @property
+    def isNonlinear(self):
+        """The public interface for the isNonlinear attribute. Implemented as a property so that it is read-only."""
+        return self._isNonlinear
 
     ####### Design variable methods ########
 

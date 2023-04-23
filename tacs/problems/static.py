@@ -20,7 +20,9 @@ import numpy as np
 
 import tacs.TACS
 import tacs.elements
-from .base import TACSProblem
+import tacs.solvers
+from tacs.problems.base import TACSProblem
+from tacs.utilities import SolverHistory
 
 
 class StaticProblem(TACSProblem):
@@ -84,11 +86,26 @@ class StaticProblem(TACSProblem):
             10,
             "Print frequency for sub iterations of linear solver.",
         ],
+        "nonlinearSolverMonitorVars": [
+            list,
+            [
+                "linSolverIters",
+                "linSolverRes",
+                "lineSearchStep",
+                "lineSearchIters",
+            ],
+            "List of variables to include in nonlinear solver monitor output. Choose from 'linSolverIters', 'linSolverRes', 'loadScale', 'lineSearchStep', 'EWTol', and 'lineSearchIters'.",
+        ],
         # Output Options
         "writeSolution": [
             bool,
             True,
             "Flag for suppressing all f5 file writing.",
+        ],
+        "writeNLIterSolutions": [
+            bool,
+            False,
+            "Flag to save a solution file at every nonlinear solver iterations.",
         ],
         "numberSolutions": [
             bool,
@@ -101,6 +118,8 @@ class StaticProblem(TACSProblem):
             "Flag for printing out timing information for class procedures.",
         ],
     }
+    defaultOptions.update(tacs.solvers.NewtonSolver.defaultOptions)
+    defaultOptions.update(tacs.solvers.ContinuationSolver.defaultOptions)
 
     def __init__(
         self,
@@ -109,6 +128,7 @@ class StaticProblem(TACSProblem):
         comm,
         outputViewer=None,
         meshLoader=None,
+        isNonlinear=False,
         options=None,
     ):
         """
@@ -142,15 +162,124 @@ class StaticProblem(TACSProblem):
 
         # Set linear solver to None, until we set it up later
         self.KSM = None
+        self.history = None
+        self.newtonSolver = None
+        self.nonlinearSolver = None
 
         # Default setup for common problem class objects, sets up comm and options
-        TACSProblem.__init__(self, assembler, comm, options, outputViewer, meshLoader)
+        TACSProblem.__init__(
+            self, assembler, comm, options, outputViewer, meshLoader, isNonlinear
+        )
 
         # Create problem-specific variables
         self._createVariables()
 
+        # Setup solver and solver history objects for nonlinear problems
+        if self.isNonlinear:
+            self._createSolverHistory()
+
+            # Create Newton solver, the inner solver for the continuation solver
+            solverOptions = {}
+            solverOptionNames = [
+                name.lower() for name in tacs.solvers.NewtonSolver.defaultOptions
+            ]
+            for key in self.options:
+                if key.lower() in solverOptionNames:
+                    solverOptions[key] = self.getOption(key)
+
+            self.newtonSolver = tacs.solvers.NewtonSolver(
+                assembler=self.assembler,
+                setStateFunc=self.setVariables,
+                resFunc=self.getResidual,
+                jacFunc=self.updateJacobian,
+                pcUpdateFunc=self.updatePreconditioner,
+                linearSolver=self.KSM,
+                stateVec=self.u,
+                resVec=self.res,
+                options=solverOptions,
+                comm=self.comm,
+            )
+
+            # And now create the continuation solver
+            solverOptions = {}
+            solverOptionNames = [
+                name.lower() for name in tacs.solvers.ContinuationSolver.defaultOptions
+            ]
+            for key in self.options:
+                if key.lower() in solverOptionNames:
+                    solverOptions[key] = self.getOption(key)
+
+            def getLoadScale():
+                return self.loadScale
+
+            self.nonlinearSolver = tacs.solvers.ContinuationSolver(
+                jacFunc=self.updateJacobian,
+                pcUpdateFunc=self.updatePreconditioner,
+                linearSolver=self.KSM,
+                setLambdaFunc=self.setLoadScale,
+                getLambdaFunc=getLoadScale,
+                innerSolver=self.newtonSolver,
+                options=solverOptions,
+                comm=self.comm,
+            )
+            self.nonlinearSolver.setCallback(self._nonlinearCallback)
+
+    def _createSolverHistory(self):
+        """Setup the solver history object based on the current options
+
+        The solver history is only created on the root processor.
+        """
+        monitorVars = [s.lower() for s in self.getOption("nonlinearSolverMonitorVars")]
+        numType = float if self.dtype == np.float64 else complex
+        if self.comm.rank == 0:
+            history = SolverHistory()
+
+            # Define the variables to be stored in the history
+            # Continuation increment
+            history.addVariable("Increment", int, printVar=True)
+            # Load scale
+            history.addVariable("Lambda", float, printVar=True)
+            # Newton solve iteration number
+            history.addVariable("SubIter", int, printVar=True)
+            # Einstat walker linear solver tolerance
+            if self.getOption("newtonSolverUseEW"):
+                history.addVariable("EW Tol", float, printVar="ewtol" in monitorVars)
+            # Number of linear solver iterations
+            history.addVariable(
+                "Lin iters", int, printVar="linsolveriters" in monitorVars
+            )
+            # Linear solver residual norm
+            history.addVariable(
+                "Lin res", numType, printVar="linsolverres" in monitorVars
+            )
+            # Residual norm (absolute and relative)
+            history.addVariable("Res norm", numType, printVar=True)
+            history.addVariable("Rel res norm", numType, printVar=True)
+            # state norm
+            history.addVariable("U norm", numType, printVar=True)
+            # Line search step size
+            history.addVariable(
+                "LS step",
+                float,
+                printVar="linesearchstep" in monitorVars
+                and self.getOption("useLineSearch"),
+            )
+            # Num line search iterations
+            history.addVariable(
+                "LS iters",
+                int,
+                printVar="linesearchiters" in monitorVars
+                and self.getOption("useLineSearch"),
+            )
+            # Flags
+            history.addVariable("Flags", str, printVar=True)
+
+            self.history = history
+
     def _createVariables(self):
         """Internal to create the variable required by TACS"""
+
+        opt = self.getOption
 
         # Generic residual vector
         self.res = self.assembler.createVec()
@@ -161,6 +290,7 @@ class StaticProblem(TACSProblem):
         self.dIduList = OrderedDict()
         self.dvSensList = OrderedDict()
         self.xptSensList = OrderedDict()
+
         # Temporary vector for adjoint solve
         self.phi = self.assembler.createVec()
         self.adjRHS = self.assembler.createVec()
@@ -168,9 +298,18 @@ class StaticProblem(TACSProblem):
         # Load vector
         self.F = self.assembler.createVec()
         self.F_array = self.F.getArray()
+
         # State variable vector
         self.u = self.assembler.createVec()
         self.u_array = self.u.getArray()
+
+        # Vectors used to decompose residual into external and internal forces
+        self.externalForce = self.assembler.createVec()
+        self.internalForce = self.assembler.createVec()
+
+        if self.isNonlinear:
+            self.u_inc_start = self.assembler.createVec()
+
         # Auxiliary element object for applying tractions/pressure
         self.auxElems = tacs.TACS.AuxElements()
         self.callCounter = -1
@@ -182,8 +321,6 @@ class StaticProblem(TACSProblem):
 
         # Load scaling factor
         self._loadScale = 1.0
-
-        opt = self.getOption
 
         # Tangent Stiffness --- process the ordering option here:
         ordering = opt("orderingType")
@@ -268,7 +405,15 @@ class StaticProblem(TACSProblem):
             )
 
         # Linear solver factor flag
-        self._factorOnNext = True
+        self._jacobianUpdateRequired = True
+        self._preconditionerUpdateRequired = True
+
+        # Give new vectors and linear solver to nonlinear solver
+        for solver in [self.newtonSolver, self.nonlinearSolver]:
+            if solver is not None:
+                solver.linearSolver = self.KSM
+                solver.stateVec = self.u
+                solver.resVec = self.res
 
     def setOption(self, name, value):
         """
@@ -285,23 +430,50 @@ class StaticProblem(TACSProblem):
         # Default setOption for common problem class objects
         TACSProblem.setOption(self, name, value)
 
+        createVariables = True
+
         if self.KSM is not None:
             # Update tolerances
             if "l2convergence" in name.lower():
+                createVariables = False
                 self.KSM.setTolerances(
                     self.getOption("L2ConvergenceRel"),
                     self.getOption("L2Convergence"),
                 )
+                if self.nonlinearSolver is not None:
+                    self.nonlinearSolver.setOption(
+                        "newtonSolverRelLinTol", self.getOption("L2ConvergenceRel")
+                    )
+
             # No need to reset solver for output options
-            elif name.lower() in [
+            if name.lower() in [
                 "writesolution",
+                "writenlitersolutions",
                 "printtiming",
                 "numbersolutions",
                 "outputdir",
             ]:
-                pass
+                createVariables = False
+
+            if self.isNonlinear:
+                # Pass option to nonlinear solver if it is a nonlinear solver option
+                if name.lower() in [
+                    opt.lower() for opt in self.nonlinearSolver.defaultOptions
+                ]:
+                    createVariables = False
+                    if self.nonlinearSolver is not None:
+                        self.nonlinearSolver.setOption(name, value)
+
+                # We need to create a new solver history object if the monitor variables have updated
+                if (
+                    name.lower() in ["nonlinearsolvermonitorvars", "newtonsolveruseew"]
+                    and self.history is not None
+                ):
+                    createVariables = False
+                    self._createSolverHistory()
+
             # Reset solver for all other option changes
-            else:
+            if createVariables:
                 self._createVariables()
 
     @property
@@ -344,7 +516,7 @@ class StaticProblem(TACSProblem):
             Value to set the load scale to
         """
         if value != self._loadScale:
-            self._factorOnNext = True
+            self._jacobianUpdateRequired = True
             self._loadScale = value
 
     def addFunction(self, funcName, funcHandle, compIDs=None, **kwargs):
@@ -391,7 +563,7 @@ class StaticProblem(TACSProblem):
 
         """
         TACSProblem.setDesignVars(self, x)
-        self._factorOnNext = True
+        self._jacobianUpdateRequired = True
 
     def setNodes(self, coords):
         """
@@ -404,7 +576,7 @@ class StaticProblem(TACSProblem):
             the number of structural nodes on this processor.
         """
         TACSProblem.setNodes(self, coords)
-        self._factorOnNext = True
+        self._jacobianUpdateRequired = True
 
     ####### Load adding methods ########
 
@@ -706,23 +878,15 @@ class StaticProblem(TACSProblem):
         loadCase. The stiffness matrix is assembled and factored.
         """
 
-        if self._factorOnNext:
-            # Assemble residual and stiffness matrix (w/o artificial terms)
-            self.assembler.assembleJacobian(
-                self.alpha,
-                self.beta,
-                self.gamma,
-                self.res,
-                self.K,
-                loadScale=self._loadScale,
-            )
-            # Stiffness matrix must include artificial terms before pc factor
-            # to prevent factorization issues w/ zero-diagonals
-            self.K.axpy(1.0, self.rbeArtificialStiffness)
-            self.PC.factor()
-            # Remove artificial stiffness terms to get true stiffness mat
-            self.K.axpy(-1.0, self.rbeArtificialStiffness)
-            self._factorOnNext = False
+        self.updateJacobian()
+        self.updatePreconditioner()
+
+        if self.isNonlinear:
+            # Reset the solver history
+            if self.rank == 0:
+                self.history.reset(clearMetadata=True)
+                self.history.addMetadata("Options", self.options)
+                self.history.addMetadata("Name", self.name)
 
     def solve(self, Fext=None):
         """
@@ -741,7 +905,6 @@ class StaticProblem(TACSProblem):
         startTime = time.time()
 
         self.callCounter += 1
-
         setupProblemTime = time.time()
 
         # Set problem vars to assembler
@@ -752,23 +915,166 @@ class StaticProblem(TACSProblem):
 
         initSolveTime = time.time()
 
-        # Get current residual
-        self.getResidual(self.res, Fext=Fext)
+        if self.isNonlinear:
+            hasConverged = self.solveNonlinear(Fext)
+        else:
+            # Get current residual
+            self.getResidual(self.res, Fext=Fext)
 
-        # Get rhs vector
-        self.K.mult(self.u, self.rhs)
-        self.rhs.axpy(-1.0, self.res)
+            # Get rhs vector
+            self.K.mult(self.u, self.rhs)
+            self.rhs.axpy(-1.0, self.res)
 
-        # Set initnorm as the norm of rhs
-        self.initNorm = np.real(self.rhs.norm())
+            # Set initnorm as the norm of rhs
+            self.initNorm = np.real(self.rhs.norm())
 
-        # Starting Norm for this computation
-        self.startNorm = np.real(self.res.norm())
+            # Starting Norm for this computation
+            self.startNorm = np.real(self.res.norm())
 
-        initNormTime = time.time()
+            initNormTime = time.time()
 
-        # Solve Linear System for the update
-        success = self.KSM.solve(self.res, self.update)
+            # Solve Linear System for the update
+            hasConverged = self.solveLinear(self.res, self.update)
+
+            self.update.scale(-1.0)
+
+            solveTime = time.time()
+
+            # Update State Variables
+            self.assembler.getVariables(self.u)
+            self.u.axpy(1.0, self.update)
+            self.assembler.setVariables(self.u)
+
+            stateUpdateTime = time.time()
+
+            # Get updated residual
+            self.getResidual(self.res, Fext)
+            self.finalNorm = np.real(self.res.norm())
+
+            finalNormTime = time.time()
+
+            # If timing was was requested print it, if the solution is nonlinear
+            # print this information automatically if prinititerations was requested.
+            if self.getOption("printTiming"):
+                self._pp("+--------------------------------------------------+")
+                self._pp("|")
+                self._pp("| TACS Solve Times:")
+                self._pp("|")
+                self._pp(
+                    "| %-30s: %10.3f sec"
+                    % ("TACS Setup Time", setupProblemTime - startTime)
+                )
+                self._pp(
+                    "| %-30s: %10.3f sec"
+                    % ("TACS Solve Init Time", initSolveTime - setupProblemTime)
+                )
+                self._pp(
+                    "| %-30s: %10.3f sec"
+                    % ("TACS Init Norm Time", initNormTime - initSolveTime)
+                )
+                self._pp(
+                    "| %-30s: %10.3f sec"
+                    % ("TACS Solve Time", solveTime - initNormTime)
+                )
+                self._pp(
+                    "| %-30s: %10.3f sec"
+                    % ("TACS State Update Time", stateUpdateTime - solveTime)
+                )
+                self._pp(
+                    "| %-30s: %10.3f sec"
+                    % ("TACS Final Norm Time", finalNormTime - stateUpdateTime)
+                )
+                self._pp("|")
+                self._pp(
+                    "| %-30s: %10.3f sec"
+                    % ("TACS Total Solution Time", finalNormTime - startTime)
+                )
+                self._pp("+--------------------------------------------------+")
+
+        return hasConverged
+
+    def solveNonlinear(self, Fext=None):
+        # Compute the internal and external force components of the residual at the current point
+        self.getForces(
+            externalForceVec=self.externalForce,
+            internalForceVec=self.internalForce,
+            Fext=Fext,
+        )
+        self.initNorm = np.real(self.externalForce.norm())
+
+        # We need to update the residual function handle used by the nonlinear solver based on the current external force vector
+        def resFunc(res):
+            self.getResidual(res, Fext=Fext)
+
+        self.nonlinearSolver.resFunc = resFunc
+        self.newtonSolver.resFunc = resFunc
+        self.nonlinearSolver.setRefNorm(self.initNorm)
+        self.nonlinearSolver.solve()
+
+        # Since the state has changed, we need to flag that the jacobian and preconditioner should be before the next primal or adjoint solve
+        self._preconditionerUpdateRequired = True
+        self._jacobianUpdateRequired = True
+
+        # We should also reset the linear solver convergence so that any loosening of the linear convergence criteria are undone before a possible adjoint solve
+        self.KSM.setTolerances(
+            self.getOption("L2ConvergenceRel"),
+            self.getOption("L2Convergence"),
+        )
+
+        # Finally return a bool indicating whether the solve was successful
+        return self.nonlinearSolver.hasConverged
+
+    def _nonlinearCallback(self, solver, u, res, monitorVars):
+        """Callback function to be called by the nonlinear solver at each iteration
+
+        Parameters
+        ----------
+        solver : pyTACS solver object
+            The solver
+        u : tacs.TACS.Vec
+            Current state vector
+        res : tacs.TACS.Vec
+            Current residual vector
+        monitorVars : dict
+            Dictionary of variables to monitor, the values the solver should include can be
+            specified through the ``"nonlinearSolverMonitorVars"`` option.
+        """
+        iteration = 0
+        if self.rank == 0:
+            # Figure out the iteration number
+            iteration = self.history.getIter()
+            if iteration % 50 == 0:
+                self.history.printHeader()
+            self.history.write(monitorVars)
+            self.history.printData()
+
+        self.comm.bcast(iteration, root=0)
+
+        if self.getOption("writeNLIterSolutions"):
+            # import pdb
+
+            # pdb.set_trace()
+            self.writeSolution(
+                baseName=f"{self.name}-{self.callCounter:03d}-NLIter", number=iteration
+            )
+
+    def solveLinear(self, res, sol):
+        """Solve the linear system J * sol = res using the current Jacobian matrix
+
+        Parameters
+        ----------
+        res : tacs.TACS.Vec
+            Right hand side of the linear system
+        sol : tacs.TACS.Vec
+            Vector to store the solution in
+
+        Returns
+        -------
+        bool
+            Whether the linear solve converged
+        """
+        success = self.KSM.solve(res, sol)
+        success = success == 1
 
         if not success:
             self._TACSWarning(
@@ -776,62 +1082,50 @@ class StaticProblem(TACSProblem):
                 "This is likely a sign that the problem is ill-conditioned. "
                 "Check that the model is properly restrained."
             )
+        return success
 
-        self.update.scale(-1.0)
+    def updateJacobian(self, res=None):
+        """Update the Jacobian (a.k.a stiffness) matrix
 
-        solveTime = time.time()
+        The Jacobian will only actually be updated if the
+        ``_jacobianUpdateRequired`` flag is set to True.
 
-        # Update State Variables
-        self.assembler.getVariables(self.u)
-        self.u.axpy(1.0, self.update)
-        self.assembler.setVariables(self.u)
-
-        stateUpdateTime = time.time()
-
-        # Get updated residual
-        self.getResidual(self.res, Fext)
-        self.finalNorm = np.real(self.res.norm())
-
-        finalNormTime = time.time()
-
-        # If timing was was requested print it, if the solution is nonlinear
-        # print this information automatically if prinititerations was requested.
-        if self.getOption("printTiming"):
-            self._pp("+--------------------------------------------------+")
-            self._pp("|")
-            self._pp("| TACS Solve Times:")
-            self._pp("|")
-            self._pp(
-                "| %-30s: %10.3f sec"
-                % ("TACS Setup Time", setupProblemTime - startTime)
+        Parameters
+        ----------
+        res : tacs.TACS.Vec, optional
+            If provided, the residual is also computed and stored in this vector
+        """
+        if self._jacobianUpdateRequired:
+            # Assemble residual and stiffness matrix (w/o artificial terms)
+            self.assembler.assembleJacobian(
+                self.alpha,
+                self.beta,
+                self.gamma,
+                res,
+                self.K,
+                loadScale=self._loadScale,
             )
-            self._pp(
-                "| %-30s: %10.3f sec"
-                % ("TACS Solve Init Time", initSolveTime - setupProblemTime)
-            )
-            self._pp(
-                "| %-30s: %10.3f sec"
-                % ("TACS Init Norm Time", initNormTime - initSolveTime)
-            )
-            self._pp(
-                "| %-30s: %10.3f sec" % ("TACS Solve Time", solveTime - initNormTime)
-            )
-            self._pp(
-                "| %-30s: %10.3f sec"
-                % ("TACS State Update Time", stateUpdateTime - solveTime)
-            )
-            self._pp(
-                "| %-30s: %10.3f sec"
-                % ("TACS Final Norm Time", finalNormTime - stateUpdateTime)
-            )
-            self._pp("|")
-            self._pp(
-                "| %-30s: %10.3f sec"
-                % ("TACS Total Solution Time", finalNormTime - startTime)
-            )
-            self._pp("+--------------------------------------------------+")
+            self._preconditionerUpdateRequired = True
 
-        return
+    def updatePreconditioner(self):
+        """Update the Jacobian (a.k.a stiffness) matrix preconditioner
+
+        By default, the static problem uses a full LU factorization of the
+        Jacobian matrix as a preconditioner, which means that this step is
+        typically the most expensive operation in the solution process.
+
+        The preconditioner will only actually be updated if the
+        ``_preconditionerUpdateRequired`` flag is set to True. This occurs
+        whenever the Jacobian is updated.
+        """
+        if self._preconditionerUpdateRequired:
+            # Stiffness matrix must include artificial terms before pc factor
+            # to prevent factorization issues w/ zero-diagonals
+            self.K.axpy(1.0, self.rbeArtificialStiffness)
+            self.PC.factor()
+            # Remove artificial stiffness terms to get true stiffness mat
+            self.K.axpy(-1.0, self.rbeArtificialStiffness)
+            self._preconditionerUpdateRequired = False
 
     ####### Function eval/sensitivity methods ########
 
@@ -1024,39 +1318,39 @@ class StaticProblem(TACSProblem):
             self._pp("+--------------------------------------------------+")
             self._pp("|")
             self._pp("| TACS Adjoint Times:")
-            print("|")
-            print(
+            self._pp("|")
+            self._pp(
                 "| %-30s: %10.3f sec"
                 % ("TACS Sens Setup Problem Time", setupProblemTime - startTime)
             )
-            print(
+            self._pp(
                 "| %-30s: %10.3f sec"
                 % ("TACS Adjoint RHS Time", adjointRHSTime - setupProblemTime)
             )
             for f in evalFuncs:
-                print(
+                self._pp(
                     "| %-30s: %10.3f sec"
                     % (
                         "TACS Adjoint Solve Time - %s" % (f),
                         adjointEndTime[f] - adjointStartTime[f],
                     )
                 )
-            print(
+            self._pp(
                 "| %-30s: %10.3f sec"
                 % (
                     "Total Sensitivity Time",
                     totalSensitivityTime - adjointFinishedTime,
                 )
             )
-            print("|")
-            print(
+            self._pp("|")
+            self._pp(
                 "| %-30s: %10.3f sec"
                 % (
                     "Complete Sensitivity Time",
                     totalSensitivityTime - startTime,
                 )
             )
-            print("+--------------------------------------------------+")
+            self._pp("+--------------------------------------------------+")
 
     def addSVSens(self, evalFuncs, svSensList):
         """
@@ -1340,6 +1634,56 @@ class StaticProblem(TACSProblem):
         if resArray is not None:
             resArray[:] = res.getArray()
 
+    def getForces(self, externalForceVec, internalForceVec, Fext=None):
+        """Compute the internal and external forces acting on the structure
+
+        The computations here are based on the residual equation:
+            r(u, loadScale) = -(Fint(u) + loadScale * Fext(u))
+        Thus, the internal forces are given by:
+            Fint(u) = -r(u, 0)
+        And the external forces are given by:
+            Fext(u) = -r(u, 1) - Fi(u)
+
+        Parameters
+        ----------
+        externalForceVec : TACS BVec or numpy array
+            Vector/array to store external forces in
+        internalForceVec : TACS BVec or numpy array
+            Vector/array to store internal forces in
+        Fext : TACS BVec or numpy array, optional
+            Distributed array containing additional loads (ex. aerodynamic forces for aerostructural coupling)
+            to applied to RHS of the static problem.
+        """
+        loadScale = self._loadScale
+        self.setLoadScale(0.0)
+        self.getResidual(internalForceVec, Fext)
+        self.setLoadScale(1.0)
+        self.getResidual(externalForceVec, Fext)
+        self.setLoadScale(loadScale)
+
+        # Compute internal forces
+        if isinstance(internalForceVec, tacs.TACS.Vec):
+            internalForceVec.scale(-1.0)
+        elif isinstance(internalForceVec, np.ndarray):
+            internalForceVec[:] = -internalForceVec[:]
+
+        # Compute external forces
+        if isinstance(externalForceVec, tacs.TACS.Vec):
+            externalForceVec.scale(-1.0)
+        elif isinstance(externalForceVec, np.ndarray):
+            externalForceVec[:] = -externalForceVec[:]
+
+        if isinstance(internalForceVec, tacs.TACS.Vec):
+            if isinstance(externalForceVec, tacs.TACS.Vec):
+                externalForceVec.axpy(-1.0, internalForceVec)
+            elif isinstance(externalForceVec, np.ndarray):
+                externalForceVec[:] = externalForceVec[:] - internalForceVec.getArray()
+        elif isinstance(internalForceVec, np.ndarray):
+            if isinstance(externalForceVec, np.ndarray):
+                externalForceVec[:] = externalForceVec[:] - internalForceVec[:]
+            elif isinstance(externalForceVec, tacs.TACS.Vec):
+                externalForceVec.axpy(-1.0, self._arrayToVec(internalForceVec))
+
     def getJacobian(self):
         """Get the problem's Jacobian in sciPy sparse matrix format
 
@@ -1450,7 +1794,7 @@ class StaticProblem(TACSProblem):
         bcTerms.axpy(-1.0, self.adjRHS)
 
         # Solve Linear System
-        self.KSM.solve(self.adjRHS, self.phi)
+        self.solveLinear(self.adjRHS, self.phi)
         self.assembler.applyBCs(self.phi)
         # Add bc terms back in
         self.phi.axpy(1.0, bcTerms)
@@ -1503,6 +1847,46 @@ class StaticProblem(TACSProblem):
         # Set states to assembler
         self.assembler.setVariables(self.u)
 
+        # If this is a nonlinear problem then changing the state will change the jacobian
+        if self.isNonlinear:
+            self._jacobianUpdateRequired = True
+
+    def getOutputFileName(self, outputDir=None, baseName=None, number=None):
+        """Figure out a base path/name for output files
+
+        Parameters
+        ----------
+        outputDir : str, optional
+            Directory to write file to, by default uses the 'outputDir' option
+        baseName : str, optional
+            Case name, by default uses self.name
+        number : int, optional
+            A number to append to the filename, by default uses the call-count of the problem
+
+        Returns
+        -------
+        str
+            Full path to output file (excluding any extension)
+        """
+        # Check input
+        if outputDir is None:
+            outputDir = self.getOption("outputDir")
+
+        if baseName is None:
+            baseName = self.name
+
+        # If we are numbering solution, it saving the sequence of
+        # calls, add the call number
+        if number is not None:
+            # We need number based on the provided number:
+            baseName = baseName + "_%3.3d" % number
+        else:
+            # if number is none, i.e. standalone, but we need to
+            # number solutions, use internal counter
+            if self.getOption("numberSolutions"):
+                baseName = baseName + "_%3.3d" % self.callCounter
+        return os.path.join(outputDir, baseName)
+
     def writeSolution(self, outputDir=None, baseName=None, number=None):
         """
         This is a generic shell function that writes the output
@@ -1526,25 +1910,28 @@ class StaticProblem(TACSProblem):
         # Make sure assembler variables are up to date
         self._updateAssemblerVars()
 
-        # Check input
-        if outputDir is None:
-            outputDir = self.getOption("outputDir")
-
-        if baseName is None:
-            baseName = self.name
-
-        # If we are numbering solution, it saving the sequence of
-        # calls, add the call number
-        if number is not None:
-            # We need number based on the provided number:
-            baseName = baseName + "_%3.3d" % number
-        else:
-            # if number is none, i.e. standalone, but we need to
-            # number solutions, use internal counter
-            if self.getOption("numberSolutions"):
-                baseName = baseName + "_%3.3d" % self.callCounter
+        # Figure out the output file base name
+        baseName = self.getOutputFileName(outputDir, baseName, number)
 
         # Unless the writeSolution option is off write actual file:
         if self.getOption("writeSolution"):
-            base = os.path.join(outputDir, baseName) + ".f5"
-            self.outputViewer.writeToFile(base)
+            self.outputViewer.writeToFile(baseName + ".f5")
+
+    def writeSolutionHistory(self, outputDir=None, baseName=None, number=None):
+        """Write the nonlinear solver history to a file
+
+        Parameters
+        ----------
+        outputDir : str or None
+            Use the supplied output directory
+        baseName : str or None
+            Use this supplied string for the base filename. Typically
+            only used from an external solver.
+        number : int or None
+            Use the user supplied number to index solution. Again, only
+            typically used from an external solver
+        """
+        # Figure out the output file base name
+        baseName = self.getOutputFileName(outputDir, baseName, number)
+        if self.history is not None:
+            self.history.save(baseName)
