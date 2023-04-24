@@ -6,7 +6,7 @@ from pytacs_analysis_base_test import PyTACSTestCase
 from tacs import pytacs, elements, constitutive, functions
 
 """"
-The nominal case is a 0.5m x 0.5m flat plate under three load cases: 
+The nominal case is a 0.5m x 0.5m flat plate under three load cases:
 a 1 MN point distributed force, a 10MPa pressure, and a 1 MPa traction. The
 perimeter of the plate is fixed in all 6 degrees of freedom. The plate comprises
 100 CQUAD4 elements and test KSFailure, KSDisplacement, StructuralMass, and Compliance functions and sensitivities.
@@ -160,4 +160,12 @@ class ProblemTest(PyTACSTestCase.PyTACSTest):
         constraint.addConstraint("ALL", compIDs=allCompIDs)
         tacs_probs.append(constraint)
 
+        constraint = fea_assembler.createPanelLengthConstraint("panel_con")
+        constraint.addConstraint("ALL", compIDs=allCompIDs)
+        tacs_probs.append(constraint)
+
         return tacs_probs, fea_assembler
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()

@@ -675,6 +675,75 @@ class MassFunctions(om.ExplicitComponent):
                         [func_name], [d_inputs["x_struct0"]], scale=d_func
                     )
 
+class ConstraintFunctions(om.ExplicitComponent):
+    """
+    Component to compute TACS constraint functions
+    """
+
+    def initialize(self):
+        self.options.declare("fea_assembler", recordable=False)
+        self.options.declare("check_partials")
+
+        self.fea_assembler = None
+        self.check_partials = False
+
+    def setup(self):
+        self.fea_assembler = self.options["fea_assembler"]
+        self.check_partials = self.options["check_partials"]
+
+        # TACS part of setup
+        local_ndvs = self.fea_assembler.getNumDesignVars()
+
+        # OpenMDAO part of setup
+        self.add_input(
+            "tacs_dvs",
+            distributed=True,
+            shape=local_ndvs,
+            desc="tacs design variables",
+            tags=["mphys_coupling"],
+        )
+        self.add_input(
+            "x_struct0",
+            distributed=True,
+            shape_by_conn=True,
+            desc="structural node coordinates",
+            tags=["mphys_coordinates"],
+        )
+
+    # def _update_internal(self, inputs):
+    #     self.sp.setDesignVars(inputs["tacs_dvs"])
+    #     self.sp.setNodes(inputs["x_struct0"])
+
+    # def compute(self, inputs, outputs):
+    #     self._update_internal(inputs)
+
+    #     # Evaluate functions
+    #     funcs = {}
+    #     self.sp.evalFunctions(funcs, evalFuncs=outputs.keys())
+    #     for func_name in outputs:
+    #         # Add struct problem name from key
+    #         key = self.sp.name + "_" + func_name
+    #         outputs[func_name] = funcs[key]
+
+    # def compute_jacvec_product(self, inputs, d_inputs, d_outputs, mode):
+    #     if mode == "fwd":
+    #         if not self.check_partials:
+    #             raise ValueError("TACS forward mode requested but not implemented")
+    #     if mode == "rev":
+    #         # always update internal because same tacs object could be used by multiple scenarios
+    #         # and we need to load this scenario's state back into TACS before doing derivatives
+    #         self._update_internal(inputs)
+
+    #         for func_name in d_outputs:
+    #             d_func = d_outputs[func_name]
+
+    #             if "tacs_dvs" in d_inputs:
+    #                 self.sp.addDVSens([func_name], [d_inputs["tacs_dvs"]], scale=d_func)
+
+    #             if "x_struct0" in d_inputs:
+    #                 self.sp.addXptSens(
+    #                     [func_name], [d_inputs["x_struct0"]], scale=d_func
+    #                 )
 
 class TacsCouplingGroup(om.Group):
     def initialize(self):
@@ -815,6 +884,7 @@ class TacsFuncsGroup(om.Group):
         self.options.declare("conduction", default=False)
         self.options.declare("scenario_name", default=None)
         self.options.declare("problem_setup", default=None)
+        self.options.declare("constraint_setup", default=None)
         self.options.declare("write_solution")
 
     def setup(self):
@@ -839,6 +909,12 @@ class TacsFuncsGroup(om.Group):
             # Check if the user provided back a new problem to overwrite the default
             if new_problem is not None:
                 sp = new_problem
+
+        # Setup TACS constraints with user-defined constraint function
+        constraint_setup = self.options["constraint_setup"]
+        constraints = None
+        if constraint_setup is not None:
+            constraints = constraint_setup(scenario_name, self.fea_assembler)
 
         # Promote state variables with physics-specific tag that MPhys expects
         promotes_inputs = [
@@ -882,6 +958,14 @@ class TacsFuncsGroup(om.Group):
                 promotes_outputs=["*"],
             )
 
+        if constraints is not None:
+            self.add_subsystem(
+                "constraint_funcs",
+                ConstraintFunctions(fea_assembler=self.fea_assembler, check_partials=self.check_partials),
+                promotes_inputs=promotes_inputs,
+                promotes_outputs=["*"],
+            )
+
         self.mass_funcs.mphys_set_sp(sp)
 
 
@@ -910,7 +994,7 @@ class TacsBuilder(Builder):
         pytacs_options = copy.deepcopy(self.options)
         bdf_file = pytacs_options.pop("mesh_file")
 
-        # Load optional user-defined callback function for setting up tacs elements
+        # Load optional user-defined callback function for setting up tacs assembler
         if "assembler_setup" in pytacs_options:
             assembler_setup = pytacs_options.pop("assembler_setup")
         else:
@@ -922,11 +1006,17 @@ class TacsBuilder(Builder):
         else:
             element_callback = None
 
-        # Load optional user-defined callback function for setting up tacs elements
+        # Load optional user-defined callback function for setting up tacs problem
         if "problem_setup" in pytacs_options:
             self.problem_setup = pytacs_options.pop("problem_setup")
         else:
             self.problem_setup = None
+
+        # Load optional user-defined callback function for setting up tacs constraints
+        if "constraint_setup" in pytacs_options:
+            self.constraint_setup = pytacs_options.pop("constraint_setup")
+        else:
+            self.constraint_setup = None
 
         # Create pytacs instance
         self.fea_assembler = pyTACS(bdf_file, options=pytacs_options, comm=comm)
