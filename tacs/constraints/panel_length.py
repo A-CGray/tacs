@@ -22,6 +22,7 @@ from jax import jit, jacrev
 import jax.numpy as jnp
 from jax.config import config
 import numpy as np
+import scipy as sp
 
 # ==============================================================================
 # Extension modules
@@ -31,11 +32,10 @@ from tacs.constraints.base import TACSConstraint
 config.update("jax_enable_x64", True)
 
 
-@jit
 def computePanelLength(points, direction):
     """Given the sorted points around the perimeter of a panel, compute the length of the panel in a given direction
 
-    _extended_summary_
+    Note: This function is approximate, it works best when the length direction is close to parallel with the panel
 
     Parameters
     ----------
@@ -45,30 +45,7 @@ def computePanelLength(points, direction):
     direction : length 3 jax array
         Direction in which to compute the panel length
     """
-
     numPoints = points.shape[0]
-    normalisedDirection = direction / jnp.linalg.norm(direction)
-
-    # --- Find the "average plane" of the panel by computing an SVD basis of the perimiter points ---
-    # subtract out the centroid and take the SVD
-    centroid = jnp.mean(points, axis=0, keepdims=True)
-    centredPoints = points - centroid
-    _, _, VT = jnp.linalg.svd(centredPoints, full_matrices=False)
-
-    # The first two right singular vectors are the basis vectors of the plane
-    planeBasis = VT[:2]
-
-    # --- Project the points and direction onto the plane ---
-    projectedPoints = centredPoints @ planeBasis.T
-    projectedDirection = normalisedDirection @ planeBasis.T
-    projectDirectionScale = jnp.linalg.norm(projectedDirection)
-    projectedDirection = projectedDirection / projectDirectionScale
-
-    # --- Intersection computation ---
-    # For each point in the perimeter, we now compute the point at which a line in the length direction starting at the
-    # point intersects the line along each edge in the panel. If that intersection occures within the bounds of the
-    # edge, we compute the length of the line from the current point to the intersection and this becomes a candidate
-    # value for the panel length
     length = 0.0
     for pointInd in range(numPoints):
         for edgeInd in range(numPoints):
@@ -76,25 +53,18 @@ def computePanelLength(points, direction):
             endInd = (edgeInd + 1) % numPoints
             # We only need to check edges that are not adjacent to the current point
             if not (startInd == pointInd or endInd == pointInd):
-                edge = projectedPoints[endInd] - projectedPoints[startInd]
-                # Solve the equation projectedPoints[pointInd] + alpha * projectedDirection = projectedPoints[startInd] + beta * edge to find the intersection
-                rhs = projectedPoints[startInd] - projectedPoints[pointInd]
-                A = jnp.stack([projectedDirection, -edge], axis=1)
-                sol = jnp.linalg.solve(A, rhs)
+                edge = points[endInd] - points[startInd]
+                mat = jnp.stack([direction, -edge], axis=1)
+                rhs = points[startInd] - points[pointInd]
+                sol = jnp.linalg.lstsq(mat, rhs)
                 beta = sol[1]
-                if beta <= 1 and beta >= 0:
-                    # The intersection is within the bounds of the edge, so compute the length of the line
-                    # from the current point to the intersection back in 3D space
-                    startPoint = points[pointInd]
-                    endPoint = points[startInd] + beta * (
-                        points[endInd] - points[startInd]
+                if beta - 1e-12 <= 1 and beta + 1e-12 >= 0:
+                    intersectionPoint = points[startInd] + beta * edge
+                    newLength = jnp.sqrt(
+                        jnp.sum((intersectionPoint - points[pointInd]) ** 2)
                     )
-                    newLength = jnp.linalg.norm(endPoint - startPoint)
                     length = jnp.maximum(length, newLength)
     return length
-
-
-computePanelLengthSens = jit(jacrev(computePanelLength, argnums=0))
 
 
 def simplifyPoly(nodeIDs, nodes, angleTol=18.0):
@@ -178,10 +148,34 @@ class PanelLengthConstraint(TACSConstraint):
             self, assembler, comm, options, outputViewer, meshLoader
         )
 
-        # Dictionary for storing the IDs of the nodes on the boundary of each component that is subject to a constraint
-        self.boundaryNodeIDs = {}
-        self.compIDs = []
-        self.dvInds = []
+        # Create a map from the global DV index to the proc index that owns it and the local index on that proc
+        self.globalToLocalDVNumsOnProc = self.comm.gather(
+            self.globalToLocalDVNums, root=0
+        )
+        self.DVMap = {}
+        if self.rank == 0:
+            for procInd in range(self.comm.size):
+                for globalInd, localInd in self.globalToLocalDVNumsOnProc[
+                    procInd
+                ].items():
+                    self.DVMap[globalInd] = {"proc": procInd, "localInd": localInd}
+
+        # Now create the same thing for the nodes
+        nodeDict = self.meshLoader.getGlobalToLocalNodeIDDict()
+        nodeDicts = self.comm.gather(nodeDict, root=0)
+        self.nodeMap = {}
+        if self.rank == 0:
+            for procInd in range(self.comm.size):
+                for globalInd, localInd in nodeDicts[procInd].items():
+                    self.nodeMap[globalInd] = {"proc": procInd, "localInd": localInd}
+
+        # Store the number of DVs and nodes on each proc
+        self.numLocalDVs = self.getNumDesignVars()
+
+        self.computePanelLength = computePanelLength
+        self.computePanelLengthSens = jacrev(
+            computePanelLength, argnums=0, holomorphic=(self.dtype == complex)
+        )
 
     def addConstraint(self, conName, compIDs=None, lower=None, upper=None, dvIndex=0):
         """
@@ -213,58 +207,234 @@ class PanelLengthConstraint(TACSConstraint):
             nComps = self.meshLoader.getNumComponents()
             compIDs = range(nComps)
 
+        nLocalDVs = self.comm.gather(self.numLocalDVs, root=0)
+        dvGlobalInds = []
+        dvProcs = []
+        dvLocalInds = []
+        boundaryNodeGlobalInds = []
+        boundaryNodeLocalInds = []
+        boundaryNodeLocalProcs = []
+        refAxes = []
+        dvJacRows = []
+        dvJacCols = []
+        dvJacVals = []
+        coordJacRows = []
+        coordJacCols = []
+        for ii in range(self.comm.size):
+            dvJacRows.append([])
+            dvJacCols.append([])
+            dvJacVals.append([])
+            coordJacRows.append([])
+            coordJacCols.append([])
+
         # Get the boundary node IDs for each component
         boundaryNodeIDs = self._getComponentBoundaryNodes(compIDs)
 
-        # Now figure out which proc is in charge of the DV's for each component
-        compIDs = []
-        dvInds = []
-        boundaryNodeIDs = []
-        refAxes = []
-        for compID in compIDs:
-            # Get the TACS element object associated with this compID
-            elemObj = self.meshLoader.getElementObject(compID, 0)
-            transObj = elemObj.getTransform()
-            refAxis = transObj.getRefAxis()
-            globalDvNums = elemObj.getDesignVarNums(0)
-            globalDVNum = globalDvNums[dvIndex]
-            if globalDVNum in self.globalToLocalDVNums:
-                # This proc is in charge of this DV, so store the necessary info on this proc
-                compIDs.append(compID)
-                dvInds.append(self.globalToLocalDVNums[globalDVNum])
-                boundaryNodeIDs.append(boundaryNodeIDs[compID])
+        if self.rank == 0:
+            constraintInd = 0
+            for compID in compIDs:
+                # Get the TACS element object associated with this compID
+                elemObj = self.meshLoader.getElementObject(compID, 0)
+                transObj = elemObj.getTransform()
+                try:
+                    refAxis = transObj.getRefAxis()
+                except AttributeError as e:
+                    raise AttributeError(
+                        f"The elements in component {self.meshLoader.compDescripts[compID]} do not have a reference axis. Please define one by using the 'ShellRefAxisTransform' class with your elements"
+                    ) from e
                 refAxes.append(refAxis)
+                globalDvNums = elemObj.getDesignVarNums(0)
+                dvGlobalInds.append(globalDvNums[dvIndex])
+                dvProcs.append(self.DVMap[globalDvNums[dvIndex]]["proc"])
+                dvLocalInds.append(self.DVMap[globalDvNums[dvIndex]]["localInd"])
 
-        # Add the constraint to the constraint list
-        if len(compIDs) != 0:
+                GlobalInds = []
+                LocalInds = []
+                LocalProcs = []
+                for nodeID in boundaryNodeIDs[compID]:
+                    GlobalInds.append(nodeID)
+                    LocalInds.append(self.nodeMap[nodeID]["localInd"])
+                    LocalProcs.append(self.nodeMap[nodeID]["proc"])
+                boundaryNodeGlobalInds.append(GlobalInds)
+                boundaryNodeLocalInds.append(LocalInds)
+                boundaryNodeLocalProcs.append(LocalProcs)
+
+                # Figure out the jacobian sparsity for each proc
+                # The DV jacobian on the proc that owns this component's DV will have a -1 in the row corresponding to this constraint and the column corresponding to the local DV index
+                dvJacRows[dvProcs[-1]].append(constraintInd)
+                dvJacCols[dvProcs[-1]].append(dvLocalInds[-1])
+                dvJacVals[dvProcs[-1]].append(-1.0)
+
+                for ii in range(len(boundaryNodeIDs[compID])):
+                    # the coordinate jacobian on the proc that owns this node will have 3 entries in the row corresponding to this constraint and the columns corresponding to the local node index on the proc
+                    proc = boundaryNodeLocalProcs[-1][ii]
+                    localNodeInd = boundaryNodeLocalInds[-1][ii]
+                    coordJacRows[proc] += [constraintInd] * 3
+                    coordJacCols[proc] += [
+                        3 * localNodeInd,
+                        3 * localNodeInd + 1,
+                        3 * localNodeInd + 2,
+                    ]
+
+                constraintInd += 1
+            # Add the constraint to the constraint list, we need to store:
+            # - The size of this constraint
+            # - The global index of each DV
+            # - The proc number that is in charge of each DV
+            # - The local index of each DV on the proc that is in charge of it
+            # - The global boundary node IDs for each component
+            # - The proc that owns each boundary node for each component
+            # - The local index of each boundary node on the proc that owns it
+            # - The reference axis direction for each component
             self.constraintList[conName] = {
+                "nCon": len(compIDs),
                 "compIDs": compIDs,
-                "dvInds": dvInds,
-                "boundaryNodeIDs": boundaryNodeIDs,
+                "dvGlobalInds": dvGlobalInds,
+                "dvProcs": dvProcs,
+                "dvLocalInds": dvLocalInds,
+                "boundaryNodeGlobalInds": boundaryNodeGlobalInds,
+                "boundaryNodeLocalInds": boundaryNodeLocalInds,
+                "boundaryNodeLocalProcs": boundaryNodeLocalProcs,
                 "refAxes": refAxes,
             }
         else:
-            self.constraintList[conName] = None
+            self.constraintList[conName] = {"nCon": len(compIDs)}
+            dvJacRows = None
+            dvJacCols = None
+            dvJacVals = None
+            coordJacRows = None
+            coordJacCols = None
 
-        # TODO: Need to add something here to keep track of global size of constraint array and which entries are on which proc?
+        # These constraints are linear w.r.t the DVs so we can just precompute the DV jacobian for each proc
+        dvJacRows = self.comm.scatter(dvJacRows, root=0)
+        dvJacCols = self.comm.scatter(dvJacCols, root=0)
+        dvJacVals = self.comm.scatter(dvJacVals, root=0)
+        coordJacRows = self.comm.scatter(coordJacRows, root=0)
+        coordJacCols = self.comm.scatter(coordJacCols, root=0)
+        self.constraintList[conName]["dvJac"] = sp.sparse.csr_matrix(
+            (dvJacVals, (dvJacRows, dvJacCols)),
+            shape=(len(compIDs), self.numLocalDVs),
+        )
+        self.constraintList[conName]["coordJacRows"] = coordJacRows
+        self.constraintList[conName]["coordJacCols"] = coordJacCols
 
         success = True
 
         return success
 
     def evalConstraints(self, funcs, evalCons=None, ignoreMissing=False):
+        # Return same array from all procs
+
         # Check if user specified which constraints to output
         # Otherwise, output them all
         evalCons = self._processEvalCons(evalCons, ignoreMissing)
+
+        # We will compute everything on the root proc and then broadcast the results, this is definitely not the most efficient way to do this so we may want to re-do this in future, but this works for now
+        # Get all of the DVs and nodes on the root proc
+        DVs = self.comm.gather(self.x.getArray(), root=0)
+        nodes = self.comm.gather(self.Xpts.getArray(), root=0)
+        if self.rank == 0:
+            for ii in range(self.comm.size):
+                nodes[ii] = nodes[ii].reshape(-1, 3)
+
         # Loop through each requested constraint set
         for conName in evalCons:
-            if self.constraintList[conName] is not None:
-                key = f"{self.name}_{conName}"
+            key = f"{self.name}_{conName}"
+            nCon = self.constraintList[conName]["nCon"]
+            constraintValues = np.zeros(nCon, dtype=self.dtype)
+            if self.rank == 0:
+                for ii in range(nCon):
+                    numPoints = len(
+                        self.constraintList[conName]["boundaryNodeGlobalInds"][ii]
+                    )
+                    boundaryPoints = np.zeros((numPoints, 3), dtype=self.dtype)
+                    for jj in range(numPoints):
+                        nodeProc = self.constraintList[conName][
+                            "boundaryNodeLocalProcs"
+                        ][ii][jj]
+                        localInd = self.constraintList[conName][
+                            "boundaryNodeLocalInds"
+                        ][ii][jj]
+                        boundaryPoints[jj] = nodes[nodeProc][localInd]
+                    refAxis = jnp.array(self.constraintList[conName]["refAxes"][ii])
+                    L = self.computePanelLength(jnp.array(boundaryPoints), refAxis)
+                    DVProc = self.constraintList[conName]["dvProcs"][ii]
+                    DVLocalInd = self.constraintList[conName]["dvLocalInds"][ii]
+                    constraintValues[ii] = self.dtype(L) - DVs[DVProc][DVLocalInd]
+            # exit(1)
+            funcs[key] = self.comm.bcast(constraintValues, root=0)
+
+    def evalConstraintsSens(self, funcsSens, evalCons=None):
+        # Sens returns sparse mat with all rows (all constraints) but only columns for this proc's local dv's/node coordinates
+
+        # Check if user specified which constraints to output
+        # Otherwise, output them all
+        evalCons = self._processEvalCons(evalCons)
+
+        # We will compute everything on the root proc and then broadcast the results,
+        # this is definitely not the most efficient way to do this so we may want to
+        # re-do it in future, but this works for now
+
+        # Get all of the DVs and nodes on the root proc
+        DVs = self.comm.gather(self.x.getArray(), root=0)
+        nodes = self.comm.gather(self.Xpts.getArray(), root=0)
+        if self.rank == 0:
+            for ii in range(self.comm.size):
+                nodes[ii] = nodes[ii].reshape(-1, 3)
+
+        # Get number of nodes coords on this proc
+        nCoords = self.getNumCoordinates()
+
+        # Loop through each requested constraint set
+        for conName in evalCons:
+            key = f"{self.name}_{conName}"
+            nCon = self.constraintList[conName]["nCon"]
+            funcsSens[key] = {}
+            funcsSens[key][self.varName] = self.constraintList[conName]["dvJac"]
+            funcsSens[key][self.coordName] = sp.sparse.csr_matrix(
+                (nCon, nCoords), dtype=self.dtype
+            )
+            if self.rank == 0:
+                coordJacVals = []
+                for ii in range(self.comm.size):
+                    coordJacVals.append([])
+                for ii in range(nCon):
+                    numPoints = len(
+                        self.constraintList[conName]["boundaryNodeGlobalInds"][ii]
+                    )
+                    boundaryPoints = np.zeros((numPoints, 3), dtype=self.dtype)
+
+                    for jj in range(numPoints):
+                        nodeProc = self.constraintList[conName][
+                            "boundaryNodeLocalProcs"
+                        ][ii][jj]
+                        localInd = self.constraintList[conName][
+                            "boundaryNodeLocalInds"
+                        ][ii][jj]
+                        boundaryPoints[jj] = nodes[nodeProc][localInd]
+                    refAxis = jnp.array(self.constraintList[conName]["refAxes"][ii])
+                    points = jnp.array(boundaryPoints)
+                    LSens = np.asarray(self.computePanelLengthSens(points, refAxis))
+                    for jj in range(numPoints):
+                        nodeProc = self.constraintList[conName][
+                            "boundaryNodeLocalProcs"
+                        ][ii][jj]
+                        coordJacVals[nodeProc] += LSens[jj].tolist()
+            else:
+                coordJacVals = None
+            coordJacVals = self.comm.scatter(coordJacVals, root=0)
+            coordJacRows = self.constraintList[conName]["coordJacRows"]
+            coordJacCols = self.constraintList[conName]["coordJacCols"]
+            funcsSens[key][self.coordName] = sp.sparse.csr_matrix(
+                (coordJacVals, (coordJacRows, coordJacCols)),
+                (nCon, nCoords),
+                dtype=self.dtype,
+            )
 
     def _getComponentBoundaryNodes(self, compIDs):
         """For a given list of components, find the nodes on the boundaries of each of the components.
 
-        The nodeIDs computed here are broadcast to all procs
+        The nodeIDs are only computed on the root proc
 
         Parameters
         ----------
@@ -396,3 +566,20 @@ class PanelLengthConstraint(TACSConstraint):
                 boundaryNodeIDs[compID] = nodeIDs
 
         return self.comm.bcast(boundaryNodeIDs, root=0)
+
+
+if __name__ == "__main__":
+    from jax import random
+
+    key = random.PRNGKey(0)
+    key2 = random.PRNGKey(12)
+    points = (
+        jnp.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
+        + random.uniform(key, (4, 3)) * 0.5
+    )
+    direction = random.uniform(key2, (1, 3))[0] - 0.5  # jnp.array([1.0, 1.0, 1.0])
+    length = computePanelLength(points, direction)
+    lengthSens = computePanelLengthSens(points, direction)
+    print(length)
+    print(lengthSens)
+    print("debug")

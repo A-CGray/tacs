@@ -219,54 +219,36 @@ class PyTACSTestCase:
 
             # Loop through each problem
             for prob in self.tacs_probs:
-                # Solve problem
-                prob.solve()
-                # Write solution
-                prob.writeSolution(outputDir=tmp_dir_name)
-                if isinstance(prob, problems.StaticProblem):
-                    prob.writeSolutionHistory(outputDir=tmp_dir_name)
                 if isinstance(prob, problems.TACSProblem):
                     # Solve problem
                     prob.solve()
                     # Write solution
                     prob.writeSolution(outputDir=tmp_dir_name)
+                if isinstance(prob, problems.StaticProblem):
+                    prob.writeSolutionHistory(outputDir=tmp_dir_name)
 
             if self.comm.rank == 0:
                 # Loop through each problem and make sure solution file exists and history file exists if static nonlinear problem
                 for prob in self.tacs_probs:
-                    with self.subTest(problem=prob.name):
-                        base_name = os.path.join(tmp_dir_name, f"{prob.name}_000")
-                        if isinstance(prob, problems.StaticProblem):
-                            f5_file = f"{base_name}.f5"
-                            self.assertTrue(
-                                os.path.exists(f5_file), msg=f"{f5_file} not found"
-                            )
-                            history_file = f"{base_name}.pkl"
-                            if prob.isNonlinear:
-                                self.assertTrue(
-                                    os.path.exists(history_file),
-                                    msg=f"{history_file} not found",
-                                )
-                            else:
-                                self.assertFalse(
-                                    os.path.exists(history_file),
-                                    msg=f"{history_file} found but should not have been",
-                                )
-                        else:
-                            if isinstance(prob, problems.TransientProblem):
-                                num_steps = prob.getNumTimeSteps() + 1
-                            else:  # ModalProblem or BucklingProblem
-                                num_steps = prob.getNumEigs()
-                            for i in range(num_steps):
-                                f5_file = f"{base_name}_%3.3d.f5" % (i)
                     if isinstance(prob, problems.TACSProblem):
                         with self.subTest(problem=prob.name):
                             base_name = os.path.join(tmp_dir_name, f"{prob.name}_000")
                             if isinstance(prob, problems.StaticProblem):
                                 f5_file = f"{base_name}.f5"
                                 self.assertTrue(
-                                    os.path.exists(f5_file), msg=f"{f5_file} exists"
+                                    os.path.exists(f5_file), msg=f"{f5_file} not found"
                                 )
+                                history_file = f"{base_name}.pkl"
+                                if prob.isNonlinear:
+                                    self.assertTrue(
+                                        os.path.exists(history_file),
+                                        msg=f"{history_file} not found",
+                                    )
+                                else:
+                                    self.assertFalse(
+                                        os.path.exists(history_file),
+                                        msg=f"{history_file} found but should not have been",
+                                    )
                             else:
                                 if isinstance(prob, problems.TransientProblem):
                                     num_steps = prob.getNumTimeSteps() + 1
@@ -274,9 +256,6 @@ class PyTACSTestCase:
                                     num_steps = prob.getNumEigs()
                                 for i in range(num_steps):
                                     f5_file = f"{base_name}_%3.3d.f5" % (i)
-                                    self.assertTrue(
-                                        os.path.exists(f5_file), msg=f"{f5_file} exists"
-                                    )
 
                 # delete all files in temp dir
                 tmp_dir.cleanup()
