@@ -762,6 +762,8 @@ cdef class CompositeShellConstitutive(ShellConstitutive):
         # Free the allocated array
         free(plys)
 
+        self.props = [prop.getMaterialProperties() for prop in ply_list]
+
 cdef class BladeStiffenedShellConstitutive(ShellConstitutive):
     """This constitutive class models a shell stiffened with T-shaped stiffeners.
     The stiffeners are not explicitly modelled.
@@ -882,8 +884,6 @@ cdef class BladeStiffenedShellConstitutive(ShellConstitutive):
 
         if self.blade_ptr:
             self.blade_ptr.setPanelPlyFractionBounds(<TacsScalar*>lowerBound.data, <TacsScalar*>upperBound.data)
-
-        self.props = [prop.getMaterialProperties() for prop in ply_list]
 
     def generateBDFCard(self):
         """
