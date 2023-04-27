@@ -730,6 +730,8 @@ cdef class Quad4ShellModRot(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad4ShellModRot(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad4ShellQuaternion(Element):
     """
@@ -758,6 +760,8 @@ cdef class Quad4ShellQuaternion(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad4ShellQuaternion(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad4NonlinearShellModRot(Element):
     """
@@ -786,6 +790,8 @@ cdef class Quad4NonlinearShellModRot(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad4NonlinearShellModRot(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad4NonlinearShellQuaternion(Element):
     """
@@ -814,6 +820,8 @@ cdef class Quad4NonlinearShellQuaternion(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad4NonlinearShellQuaternion(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad9Shell(Element):
     """
@@ -900,6 +908,8 @@ cdef class Quad9ShellModRot(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad9ShellModRot(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad9ShellQuaternion(Element):
     """
@@ -928,6 +938,8 @@ cdef class Quad9ShellQuaternion(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad9ShellQuaternion(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad9NonlinearShellModRot(Element):
     """
@@ -956,6 +968,8 @@ cdef class Quad9NonlinearShellModRot(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad9NonlinearShellModRot(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad9NonlinearShellQuaternion(Element):
     """
@@ -984,6 +998,8 @@ cdef class Quad9NonlinearShellQuaternion(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad9NonlinearShellQuaternion(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad16Shell(Element):
     """
@@ -1070,6 +1086,8 @@ cdef class Quad16ShellModRot(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad16ShellModRot(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad16ShellQuaternion(Element):
     """
@@ -1098,6 +1116,8 @@ cdef class Quad16ShellQuaternion(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad16ShellQuaternion(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad16NonlinearShellModRot(Element):
     """
@@ -1126,6 +1146,8 @@ cdef class Quad16NonlinearShellModRot(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad16NonlinearShellModRot(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad16NonlinearShellQuaternion(Element):
     """
@@ -1154,6 +1176,8 @@ cdef class Quad16NonlinearShellQuaternion(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSQuad16NonlinearShellQuaternion(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Tri3Shell(Element):
     """
@@ -1240,6 +1264,8 @@ cdef class Tri3ShellModRot(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSTri3ShellModRot(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Tri3ShellQuaternion(Element):
     """
@@ -1268,6 +1294,8 @@ cdef class Tri3ShellQuaternion(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSTri3ShellQuaternion(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Tri3NonlinearShellModRot(Element):
     """
@@ -1296,6 +1324,8 @@ cdef class Tri3NonlinearShellModRot(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSTri3NonlinearShellModRot(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Tri3NonlinearShellQuaternion(Element):
     """
@@ -1324,6 +1354,8 @@ cdef class Tri3NonlinearShellQuaternion(Element):
             transform = ShellNaturalTransform()
         self.ptr = new TACSTri3NonlinearShellQuaternion(transform.ptr, con.cptr)
         self.ptr.incref()
+        self.con = con
+        self.transform = transform
 
 cdef class Quad4ThermalShell(Element):
     """
