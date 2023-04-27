@@ -886,16 +886,18 @@ class TacsFuncsGroup(om.Group):
         self.mass_funcs.mphys_set_sp(sp)
 
         constraint_setup = self.options["constraint_setup"]
+        tacs_constraints = []
         if constraint_setup is not None:
-            constraints = constraint_setup(self.fea_assembler)
-            if isinstance(constraints, list) is False:
-                constraints = [constraints]
+            constraint_setup(scenario_name, self.fea_assembler, tacs_constraints)
+            if isinstance(tacs_constraints, list) is False:
+                tacs_constraints = [tacs_constraints]
+
             promotes_inputs = [
                 ("x_struct0", "unmasker.x_struct0"),
                 ("tacs_dvs", "distributor.tacs_dvs"),
             ]
 
-            for constraint in constraints:
+            for constraint in tacs_constraints:
                 con_comp = ConstraintComponent(
                     fea_assembler=self.fea_assembler,
                     constraint_object=constraint,
