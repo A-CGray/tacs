@@ -1,3 +1,3 @@
-from .mphys_tacs import TacsBuilder
+from .mphys_tacs import TacsBuilder, ConstraintComponent
 
-__all__ = ["TacsBuilder"]
+__all__ = ["TacsBuilder", "ConstraintComponent"]
