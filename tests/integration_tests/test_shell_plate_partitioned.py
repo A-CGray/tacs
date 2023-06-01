@@ -170,7 +170,3 @@ class ProblemTest(PyTACSTestCase.PyTACSTest):
 if __name__ == "__main__":
     import unittest
     unittest.main()
-
-    # test = ProblemTest()
-    # test.setUp()
-    # test.test_solve()
