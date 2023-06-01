@@ -11,8 +11,8 @@ from tacs import elements, constitutive, functions
 
 """
 This is a simple 1m by 2m plate made up of four quad shell elements.
-The plate is structurally loaded under a 100G gravity load and a unit force, 
-"f_struct", is applied on on every node. The mass and KSFailure of the plate 
+The plate is structurally loaded under a 100G gravity load and a unit force,
+"f_struct", is applied on on every node. The mass and KSFailure of the plate
 are evaluated as outputs and have their partial and total sensitivities checked.
 """
 
@@ -24,7 +24,7 @@ FUNC_REFS = {
     "analysis.mass": 55.6,
     "analysis.Ixx": 74.13379667,
     "analysis.ks_vmfailure": 5.778130269059719,
-    "constraints.adjacency.PANEL": [0.0, 0.0, 0.0, 0.0],
+    "analysis.adjacency.PANEL": [0.0, 0.0, 0.0, 0.0],
 }
 
 # Inputs to check total sensitivities wrt
@@ -99,7 +99,7 @@ class ProblemTest(OpenMDAOTestCase.OpenMDAOTest):
             g = np.array([0.0, 0.0, -9.81]) * 100  # m/s^2
             problem.addInertialLoad(g)
 
-        def constraint_setup(fea_assembler):
+        def constraint_setup(scenario_name, fea_assembler, constraints):
             """
             Helper function to setup tacs constraint classes
             """

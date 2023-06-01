@@ -7,8 +7,9 @@ pySystem
 # =============================================================================
 import numpy as np
 
+import tacs.pymeshloader
 import tacs.TACS
-from .utilities import BaseUI
+from tacs.utilities import BaseUI
 
 
 class TACSSystem(BaseUI):
@@ -19,6 +20,24 @@ class TACSSystem(BaseUI):
     def __init__(
         self, assembler, comm=None, options=None, outputViewer=None, meshLoader=None
     ):
+        """
+        Parameters
+        ----------
+        assembler : tacs.TACS.Assembler
+            Cython object responsible for creating and setting tacs objects used to solve problem
+
+        comm : mpi4py.MPI.Intracomm
+            The comm object on which to create the pyTACS object.
+
+        options : dict
+            Dictionary holding problem-specific option parameters (case-insensitive).
+
+        outputViewer : tacs.TACS.TACSToFH5
+            Cython object used to write out f5 files that can be converted and used for postprocessing.
+
+        meshLoader : tacs.pymeshloader.pyMeshLoader
+            pyMeshLoader object used to create the assembler.
+        """
         # TACS assembler object
         self.assembler = assembler
         # TACS F5 output writer
@@ -76,7 +95,7 @@ class TACSSystem(BaseUI):
 
         Parameters
         ----------
-        x : numpy.ndarray or dict or TACS.Vec
+        x : numpy.ndarray or dict or tacs.TACS.Vec
             The variables (typically from the optimizer) to set. It
             looks for variable in the ``self.varName`` attribute if in dict.
 
@@ -127,7 +146,7 @@ class TACSSystem(BaseUI):
 
         Returns
         -------
-        xVec : TACS.Vec
+        xVec : tacs.TACS.Vec
                Converted TACS designVec.
 
         Notes
@@ -145,6 +164,11 @@ class TACSSystem(BaseUI):
     def getNumDesignVars(self):
         """
         Return the number of design variables on this processor.
+
+        Returns
+        -------
+        ndvs : int
+            Number of design variables on this processor.
         """
         return self.x.getSize()
 
@@ -154,7 +178,7 @@ class TACSSystem(BaseUI):
 
         Returns
         -------
-        coords : array
+        coords : numpy.ndarray
             Structural coordinate in array of size (N * 3) where N is
             the number of structural nodes on this processor.
         """
@@ -197,7 +221,7 @@ class TACSSystem(BaseUI):
 
         Returns
         -------
-        Xptsvec : TACS.Vec
+        Xptsvec : tacs.TACS.Vec
                   Converted TACS nodeVec.
 
         Notes
@@ -215,6 +239,11 @@ class TACSSystem(BaseUI):
     def getNumCoordinates(self):
         """
         Return the number of mesh coordinates on this processor.
+
+        Returns
+        -------
+        ncoords : int
+            Number of mesh coordinates on this processor.
         """
         return self.Xpts.getSize()
 
@@ -223,12 +252,22 @@ class TACSSystem(BaseUI):
     def getVarsPerNode(self):
         """
         Get the number of variables per node for the model.
+
+        Returns
+        -------
+        vpn : int
+            Number of variables per node.
         """
         return self.assembler.getVarsPerNode()
 
     def getNumOwnedNodes(self):
         """
         Get the number of nodes owned by this processor.
+
+        Returns
+        -------
+        nnodes : int
+            Number of nodes on this processor.
         """
         return self.assembler.getNumOwnedNodes()
 
@@ -243,7 +282,7 @@ class TACSSystem(BaseUI):
 
         Returns
         -------
-        varVec : TACS.Vec
+        varVec : tacs.TACS.Vec
                  Converted TACS Vec.
 
         Notes

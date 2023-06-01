@@ -817,6 +817,7 @@ class TacsFuncsGroup(om.Group):
         self.options.declare("problem_setup", default=None)
         self.options.declare("constraint_setup", default=None)
         self.options.declare("write_solution")
+        self.options.declare("constraint_setup", default=None)
 
     def setup(self):
         self.fea_assembler = self.options["fea_assembler"]
@@ -885,107 +886,30 @@ class TacsFuncsGroup(om.Group):
 
         self.mass_funcs.mphys_set_sp(sp)
 
+        # Check if there are any user-defined TACS constraints
+        # Constraints behave similar to "mass" functions (i.e. they don't depend on the solution state)
         constraint_setup = self.options["constraint_setup"]
         tacs_constraints = []
         if constraint_setup is not None:
-            constraint_setup(scenario_name, self.fea_assembler, tacs_constraints)
-            if isinstance(tacs_constraints, list) is False:
-                tacs_constraints = [tacs_constraints]
+            new_constraints = constraint_setup(
+                scenario_name, self.fea_assembler, tacs_constraints
+            )
+            # Check if the user provided back new constraints to overwrite the default
+            if new_constraints is not None:
+                tacs_constraints = new_constraints
 
-            promotes_inputs = [
-                ("x_struct0", "unmasker.x_struct0"),
-                ("tacs_dvs", "distributor.tacs_dvs"),
-            ]
-
+        # Only add constraint group if there are constraints to add
+        if len(tacs_constraints) > 0:
+            con_group = self.add_subsystem("constraints", om.Group(), promotes=["*"])
+            # Loop through each constraint in lista and add to group
             for constraint in tacs_constraints:
                 con_comp = ConstraintComponent(
                     fea_assembler=self.fea_assembler,
                     constraint_object=constraint,
                 )
-                self.add_subsystem(
-                    constraint.name,
-                    con_comp,
-                    promotes_inputs=promotes_inputs,
-                    promotes_outputs=["*"],
+                con_group.add_subsystem(
+                    constraint.name, con_comp, promotes_inputs=promotes_inputs
                 )
-
-
-# class TacsConstraintGroup(om.Group):
-#     def initialize(self):
-#         self.options.declare(
-#             "fea_assembler",
-#             default=None,
-#             desc="the pytacs object itself",
-#             recordable=False,
-#         )
-#         self.options.declare(
-#             "initial_dv_vals",
-#             default=None,
-#             desc="initial values for global design variable vector",
-#         )
-#         self.options.declare(
-#             "separate_mass_dvs",
-#             default=False,
-#             desc="Flag for whether or not to separate out point mass dvs using user-defined names",
-#         )
-#         self.options.declare(
-#             "constraint_setup",
-#             default=None,
-#             desc="User-defined setup function for creating TACS constraint objects",
-#         )
-#         self.options.declare("check_partials")
-
-#     def setup(self):
-#         self.fea_assembler = self.options["fea_assembler"]
-#         self.initial_dv_vals = self.options["initial_dv_vals"]
-#         self.separate_mass_dvs = self.options["separate_mass_dvs"]
-
-#         # Setup TACS problem with user-defined output functions
-#         constraint_setup = self.options["constraint_setup"]
-#         # TACS part of setup
-#         local_ndvs = self.fea_assembler.getNumDesignVars()
-
-#         # OpenMDAO part of setup
-#         self.add_input(
-#             "tacs_dvs",
-#             distributed=True,
-#             shape=local_ndvs,
-#             desc="tacs design variables",
-#             tags=["mphys_coupling"],
-#         )
-#         self.add_input(
-#             "x_struct0",
-#             distributed=True,
-#             shape_by_conn=True,
-#             desc="structural node coordinates",
-#             tags=["mphys_coordinates"],
-#         )
-#         if constraint_setup is not None:
-#             # Add component to process TACS distributed inputs
-#             pre_comp = TacsPrecouplingGroup(
-#                 fea_assembler=self.fea_assembler,
-#                 initial_dv_vals=self.initial_dv_vals,
-#                 separate_mass_dvs=self.separate_mass_dvs,
-#             )
-#             self.add_subsystem("dv_preprocess", pre_comp, promotes=["*"])
-
-#             # Add constraints
-#             con_group = self.add_subsystem("constraints", om.Group(), promotes=["*"])
-#             tacs_constraints = constraint_setup(self.fea_assembler)
-#             if isinstance(tacs_constraints, list) is False:
-#                 tacs_constraints = [tacs_constraints]
-
-#             promotes_inputs = [
-#                 ("x_struct0", "unmasker.x_struct0"),
-#                 ("tacs_dvs", "distributor.tacs_dvs"),
-#             ]
-
-#             for constraint in tacs_constraints:
-#                 con_comp = ConstraintComponent(
-#                     fea_assembler=self.fea_assembler,
-#                     constraint_object=constraint,
-#                 )
-#                 self.add_subsystem(constraint.name, con_comp, promotes_inputs=promotes_inputs)
 
 
 class ConstraintComponent(om.ExplicitComponent):
@@ -998,14 +922,14 @@ class ConstraintComponent(om.ExplicitComponent):
         self.options.declare("constraint_object")
 
         self.fea_assembler = None
-        self.cp = None
+        self.constr = None
 
         self.old_dvs = None
         self.old_xs = None
 
     def setup(self):
         self.fea_assembler = self.options["fea_assembler"]
-        self.cp = self.options["constraint_object"]
+        self.constr = self.options["constraint_object"]
 
         # TACS part of setup
         local_ndvs = self.fea_assembler.getNumDesignVars()
@@ -1027,11 +951,11 @@ class ConstraintComponent(om.ExplicitComponent):
         )
 
         # Add eval funcs as outputs
-        con_names = self.cp.getConstraintKeys()
+        con_names = self.constr.getConstraintKeys()
         con_sizes = {}
-        self.cp.getConstraintSizes(con_sizes)
+        self.constr.getConstraintSizes(con_sizes)
         for con_name in con_names:
-            con_key = f"{self.cp.name}_{con_name}"
+            con_key = f"{self.constr.name}_{con_name}"
             ncon = con_sizes[con_key]
             self.add_output(
                 con_name, distributed=False, shape=ncon, tags=["mphys_result"]
@@ -1040,9 +964,9 @@ class ConstraintComponent(om.ExplicitComponent):
     def _update_internal(self, inputs):
         dvsNeedUpdate, xsNeedUpdate = self._need_update(inputs)
         if dvsNeedUpdate:
-            self.cp.setDesignVars(inputs["tacs_dvs"])
+            self.constr.setDesignVars(inputs["tacs_dvs"])
         if xsNeedUpdate:
-            self.cp.setNodes(inputs["x_struct0"])
+            self.constr.setNodes(inputs["x_struct0"])
 
     def _need_update(self, inputs):
         dvsNeedUpdate = False
@@ -1081,10 +1005,10 @@ class ConstraintComponent(om.ExplicitComponent):
 
         # Evaluate functions
         funcs = {}
-        self.cp.evalConstraints(funcs, evalCons=outputs.keys())
+        self.constr.evalConstraints(funcs, evalCons=outputs.keys())
         for con_name in outputs:
             # Add struct problem name from key
-            key = self.cp.name + "_" + con_name
+            key = self.constr.name + "_" + con_name
             outputs[con_name] = funcs[key]
 
     def compute_jacvec_product(self, inputs, d_inputs, d_outputs, mode):
@@ -1092,10 +1016,10 @@ class ConstraintComponent(om.ExplicitComponent):
         # and we need to load this scenario's state back into TACS before doing derivatives
         self._update_internal(inputs)
         funcs_sens = {}
-        self.cp.evalConstraintsSens(funcs_sens)
+        self.constr.evalConstraintsSens(funcs_sens)
 
         for out_name in d_outputs:
-            output_key = f"{self.cp.name}_{out_name}"
+            output_key = f"{self.constr.name}_{out_name}"
             Jdv = funcs_sens[output_key]["struct"].astype(float)
             Jxpt = funcs_sens[output_key]["Xpts"].astype(float)
 

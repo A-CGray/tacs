@@ -256,6 +256,9 @@ class PyTACSTestCase:
                                     num_steps = prob.getNumEigs()
                                 for i in range(num_steps):
                                     f5_file = f"{base_name}_%3.3d.f5" % (i)
+                                    self.assertTrue(
+                                        os.path.exists(f5_file), msg=f"{f5_file} exists"
+                                    )
 
                 # delete all files in temp dir
                 tmp_dir.cleanup()

@@ -21,6 +21,24 @@ class TACSConstraint(TACSSystem):
     def __init__(
         self, assembler, comm=None, options=None, outputViewer=None, meshLoader=None
     ):
+        """
+        Parameters
+        ----------
+        assembler : tacs.TACS.Assembler
+            Cython object responsible for creating and setting tacs objects used to solve problem
+
+        comm : mpi4py.MPI.Intracomm
+            The comm object on which to create the pyTACS object.
+
+        options : dict
+            Dictionary holding problem-specific option parameters (case-insensitive).
+
+        outputViewer : tacs.TACS.TACSToFH5
+            Cython object used to write out f5 files that can be converted and used for postprocessing.
+
+        meshLoader : tacs.pymeshloader.pyMeshLoader
+            pyMeshLoader object used to create the assembler.
+        """
         # Set attributes and options
         TACSSystem.__init__(self, assembler, comm, options, outputViewer, meshLoader)
 
@@ -67,7 +85,7 @@ class TACSConstraint(TACSSystem):
             upper bound for constraint. Defaults to 1e20.
 
         """
-        raise NotImplemented(
+        raise NotImplementedError(
             f"'addConstraint' method is not implemented for class '{type(self).__name__}'"
         )
 
@@ -141,6 +159,11 @@ class TACSConstraint(TACSSystem):
     def getConstraintKeys(self):
         """
         Return a list of the current constraint key names
+
+        Returns
+        -------
+        conNames : list[str]
+            List containing user-defined names for constraint groups added so far.
         """
         return list(self.constraintList.keys())
 
@@ -168,7 +191,7 @@ class TACSConstraint(TACSSystem):
         >>> # Result will look like (if TACSConstraint has name of 'c1'):
         >>> # {'c1_LE_SPAR': array([12354.10])}
         """
-        raise NotImplemented(
+        raise NotImplementedError(
             f"'evalConstraints' method is not implemented for class '{type(self).__name__}'"
         )
 
@@ -195,13 +218,26 @@ class TACSConstraint(TACSSystem):
         >>> # Result will look like (if TACSConstraint has name of 'c1'):
         >>> # {'c1_LE_SPAR':{'struct':<50x242 sparse matrix of type '<class 'numpy.float64'>' with 100 stored elements in Compressed Sparse Row format>}}
         """
-        raise NotImplemented(
+        raise NotImplementedError(
             f"'evalConstraintsSens' method is not implemented for class '{type(self).__name__}'"
         )
 
     def _processEvalCons(self, evalCons, ignoreMissing=True):
         """
         Internal method for processing user-provided evalCons
+
+        Parameters
+        ----------
+        evalCons : iterable object containing strings or None
+            The constraints the user wants returned
+        ignoreMissing : bool
+            Flag to supress checking for a valid constraint.
+            Defaults to True.
+
+        Returns
+        -------
+        conList : list[str]
+            List of constraints the user wants returned
         """
         # Check if user specified which constraints to output
         # Otherwise, output them all

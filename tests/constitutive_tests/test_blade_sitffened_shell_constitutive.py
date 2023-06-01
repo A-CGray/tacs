@@ -15,7 +15,7 @@ class ConstitutiveTest(unittest.TestCase):
             self.rtol = 1e-9
         else:
             self.dh = 1e-8
-            self.rtol = 1e-1
+            self.rtol = 1e-3
         self.dtype = TACS.dtype
 
         # The failure value returned by the model is an aggregate of multiple
@@ -24,7 +24,7 @@ class ConstitutiveTest(unittest.TestCase):
         self.numFailureTests = 10
 
         # Basically, only check relative tolerance
-        self.atol = 1e99
+        self.atol = self.rtol
         self.print_level = 0
 
         # Set element index
