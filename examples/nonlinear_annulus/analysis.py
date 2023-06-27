@@ -87,14 +87,16 @@ def elemCallBack(dvNum, compID, compDescript, elemDescripts, specialDVs, **kwarg
 FEAAssembler.initialize(elemCallBack)
 
 probOptions = {
-    "continuationInitialStep": 0.01,
+    "continuationInitialStep": 0.05,
     "continuationTargetIter": 6,
+    "continuationMaxIter": 100,
     "newtonSolverMaxIter": 50,
     "continuationRelTol": 1e-7,
-    "newtonSolverMaxLinIters": 5,
+    # "newtonSolverMaxLinIters": 5,
     "continuationUsePredictor": True,
     "continuationNumPredictorStates": 8,
     # "newtonSolverUseEW": True,
+    "skipFirstNLineSearch":1,
     "nRestarts": 3,
     "subSpaceSize": 20,
     "nonlinearSolverMonitorVars": [
@@ -173,9 +175,6 @@ problem.addFunction("Compliance", functions.Compliance)
 funcs = {}
 funcsSens = {}
 problem.solve()
-problem.evalFunctions(funcs)
-problem.evalFunctionsSens(funcsSens)
-problem.writeSolution(outputDir=os.path.dirname(__file__))
 problem.writeSolutionHistory(outputDir=os.path.dirname(__file__))
 
 if COMM.rank == 0:

@@ -87,9 +87,11 @@ FEAAssembler.initialize(elemCallBack)
 
 probOptions = {
     "continuationInitialStep": 1.0,
-    "newtonSolverMaxIter": 50,
+    "newtonSolverMaxIter": 200,
     "newtonSolverUseEW": True,
-    "nRestarts": 3,
+    "newtonSolverMaxLinIters": 10,
+    # "skipFirstNLineSearch": 1,
+    "nRestarts": 1,
     "subSpaceSize": 20,
     "nonlinearSolverMonitorVars": [
         "lambda",
@@ -99,7 +101,6 @@ probOptions = {
         "linesearchstep",
         "linesearchiters",
     ],
-    "newtonSolverMaxLinIters": 10,
     "printTiming": True,
 }
 problem = FEAAssembler.createStaticProblem("RadialForces", options=probOptions)
@@ -162,11 +163,11 @@ problem.addFunction("Compliance", functions.Compliance)
 funcs = {}
 funcsSens = {}
 problem.solve()
-problem.evalFunctions(funcs)
-problem.evalFunctionsSens(funcsSens)
 problem.writeSolution(outputDir=os.path.dirname(__file__))
 problem.writeSolutionHistory(outputDir=os.path.dirname(__file__))
+problem.evalFunctions(funcs)
+problem.evalFunctionsSens(funcsSens)
 
-if COMM.rank == 0:
-    pprint(funcs)
-    pprint(funcsSens)
+# if COMM.rank == 0:
+#     pprint(funcs)
+#     pprint(funcsSens)

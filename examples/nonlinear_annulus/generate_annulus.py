@@ -7,7 +7,7 @@ parser.add_argument(
     "--ne1", type=int, default=10, help="# elements in radial direction"
 )
 parser.add_argument(
-    "--ne2", type=int, default=80, help="# elements incircumferential direction"
+    "--ne2", type=int, default=80, help="# elements in circumferential direction"
 )
 args = parser.parse_args()
 

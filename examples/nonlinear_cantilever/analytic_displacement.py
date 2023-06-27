@@ -13,6 +13,9 @@ of a cantilever beam with an applied tip force
 # ==============================================================================
 # External Python modules
 # ==============================================================================
+import numpy as np
+from scipy.optimize import root_scalar
+from scipy.special import ellipe, ellipeinc, ellipk, ellipkinc
 
 # ==============================================================================
 # Extension modules
