@@ -35,82 +35,108 @@
   such that [t]^{T} Q = 0
   .         [s]
 
-  where Q in R^{(n+1)xn}. Furthermore ||Qy||_2 = ||y||_{2}.
+  where Q in R^{(n+1)xn}, this ensures that, for any x', Q*x' satisfies (2).
+  Furthermore ||Qy||_2 = ||y||_{2}.
 
-  An appropriate choice for Q is to use:
+  Following the approach proposed by Homer F Walker in "An Adaptation of Krylov
+  Subspace Method to Path Following Problems", we choose Q to be a Householder
+  matrix that transforms [t s] to [0 +-norm([t s])]:
 
   Q[x] = [x - 2v v^{T}x] = [x - 2t^{T}x/(tn*tn) t ]
   .      [  - 2w v^{T}x]   [ -2wn t^{T}x/(tn*tn)  ]
 
-  with v = t/tn, w = wn/tn
+  Where:
+  - v = t/tn
+  - w = wn/tn
+  - wn = s + sign(s)*sqrt( ||t||^2 + s^2 )
+  - tn = sqrt( ||t||^2 + wn^2 )
 
-  wn = s + sign(s)*sqrt( ||t||^2 + s^2 )
-  where tn = sqrt( ||t||^2 + wn^2 )
+  Note that the equations here are slightly different from Walker's as Walker
+  assumes norm([t s])=1. The use of sign(s) performs the choice between the two
+  possible Householder transformations in a way that minimises subtractive
+  cancellation errors. Although it should be noted that this assumes sign(0)=1.
 
-  The solution to the whole system of equations is,
+  We can then use a Krylov method to solve the system of equations:
 
-  [x] = Q[x']
-  [y]
+    [ A | r ][Q][x'] = [b]
+
+  Which can be left-preconditioned by a standard preconditioner P computed from
+  the matrix A:
+
+    [P(A)]^-1 [ A | r ][Q][x'] = [P(A)]^-1 [b]
+
+  Finally, the full solution is:
+
+    [x] = Q[x']
+    [y]
 */
-TACSContinuationPathMat::TACSContinuationPathMat(TACSMat *_A, TACSVec *_r,
-                                                 TACSVec *_t, TacsScalar s) {
-  A = _A;
-  A->incref();
-  r = _r;
-  r->incref();
-  t = _t;
-  t->incref();
-  xtmp = A->createVec();
-  xtmp->incref();
-  resetConstraint(s);
+TACSContinuationPathMat::TACSContinuationPathMat(TACSMat *const _A,
+                                                 TACSVec *const _r,
+                                                 TACSVec *const _t,
+                                                 const TacsScalar s) {
+  this->A = _A;
+  this->A->incref();
+  this->r = _r;
+  this->r->incref();
+  this->t = _t;
+  this->t->incref();
+  this->xtmp = A->createVec();
+  this->xtmp->incref();
+  setConstraint(s);
 }
 
 TACSContinuationPathMat::~TACSContinuationPathMat() {
-  A->decref();
-  r->decref();
-  t->decref();
-  xtmp->decref();
+  this->A->decref();
+  this->r->decref();
+  this->t->decref();
+  this->xtmp->decref();
 }
 
 void TACSContinuationPathMat::getVectors(TACSVec **_r, TACSVec **_t) {
   if (_r) {
-    *_r = r;
+    *_r = this->r;
   }
   if (_t) {
-    *_t = t;
+    *_t = this->t;
   }
 }
 
-void TACSContinuationPathMat::resetConstraint(TacsScalar s) {
-  TacsScalar tnorm = t->norm();
-  TacsScalar t2 = tnorm * tnorm;
+void TACSContinuationPathMat::setConstraint(const TacsScalar s) {
+  const TacsScalar tnorm = t->norm();
+  const TacsScalar t2 = tnorm * tnorm;
 
-  wn = s + (TacsRealPart(s) >= 0.0 ? 1.0 : -1.0) * sqrt(t2 + s * s);
-  tn = sqrt(t2 + wn * wn);
+  this->wn = s + (TacsRealPart(s) >= 0.0 ? 1.0 : -1.0) * sqrt(t2 + s * s);
+  this->tn = sqrt(t2 + this->wn * this->wn);
 }
 
-// Multiply x <-- Qx, return the value of the n+1-th row
-TacsScalar TACSContinuationPathMat::extract(TACSVec *x) {
-  TacsScalar tTx = t->dot(x);
-  x->axpy(-(2.0 * tTx) / (tn * tn), t);
-  return -(2.0 * wn * tTx) / (tn * tn);
+// Perform [x     ] = Q*x
+//         [lambda]
+// The vector x is modified in place while the value of lambda is returned from
+// the function
+TacsScalar TACSContinuationPathMat::applyQ(TACSVec *const x) {
+  const TacsScalar tTx = t->dot(x);
+  const TacsScalar tn2 = this->tn * this->tn;
+  x->axpy(-(2.0 * tTx) / tn2, this->t);
+  return -(2.0 * this->wn * tTx) / tn2;
 }
 
 void TACSContinuationPathMat::getSize(int *_nr, int *_nc) {
-  A->getSize(_nr, _nc);
+  this->A->getSize(_nr, _nc);
 }
 
 void TACSContinuationPathMat::mult(TACSVec *x, TACSVec *y) {
-  xtmp->copyValues(x);
+  // Compute [  xtmp] = Q*xtmp
+  //         [lambda]
+  this->xtmp->copyValues(x);
+  const TacsScalar lambda = applyQ(this->xtmp);
 
-  TacsScalar tTx = t->dot(x);
-  xtmp->axpy(-(2.0 * tTx) / (tn * tn), t);
-
-  A->mult(xtmp, y);
-  y->axpy(-(2.0 * wn * tTx) / (tn * tn), r);
+  // Compute y = [A | r]*[xtmp  ]
+  //                     [lambda]
+  this->A->mult(this->xtmp, y);
+  y->axpy(lambda, this->r);
 }
 
-TACSVec *TACSContinuationPathMat::createVec() { return A->createVec(); }
+TACSVec *TACSContinuationPathMat::createVec() { return this->A->createVec(); }
 
 /**
   Callback class for monitoring the continuation algorithm
@@ -408,9 +434,9 @@ void TACSContinuation::solve_tangent(TACSMat *mat, TACSPc *pc, TACSKsm *ksm,
       res->scale(-1.0);
 
       // Set new values back into the matrix
-      path_mat->resetConstraint(dlambda_ds);
+      path_mat->setConstraint(dlambda_ds);
       ksm->solve(res, temp);
-      dlambda_ds += path_mat->extract(temp);
+      dlambda_ds += path_mat->applyQ(temp);
 
       // tangent = tangent + temp
       tangent->axpy(1.0, temp);
@@ -526,10 +552,10 @@ void TACSContinuation::solve_tangent(TACSMat *mat, TACSPc *pc, TACSKsm *ksm,
         }
 
         // Set new values back into the matrix
-        path_mat->resetConstraint(dlambda_ds);
+        path_mat->setConstraint(dlambda_ds);
         ksm->solve(res, temp);
 
-        TacsScalar delta_lambda = path_mat->extract(temp);
+        TacsScalar delta_lambda = path_mat->applyQ(temp);
         lambda = lambda - delta_lambda;
         vars->axpy(-1.0, temp);
       }

@@ -29,7 +29,8 @@
 */
 class TACSContinuationPathMat : public TACSMat {
  public:
-  TACSContinuationPathMat(TACSMat *_A, TACSVec *_r, TACSVec *_t, TacsScalar s);
+  TACSContinuationPathMat(TACSMat *const _A, TACSVec *const _r,
+                          TACSVec *const _t, const TacsScalar s);
   ~TACSContinuationPathMat();
 
   // Return the vectors associated with the constraint
@@ -38,11 +39,11 @@ class TACSContinuationPathMat : public TACSMat {
 
   // Reset the constraint values based on the value s
   // ------------------------------------------------
-  void resetConstraint(TacsScalar s);
+  void setConstraint(const TacsScalar s);
 
   // Multiply x <-- Qx, return the value of the n+1-th row
   // -----------------------------------------------------
-  TacsScalar extract(TACSVec *x);
+  TacsScalar applyQ(TACSVec *const x);
 
   // The required TACSMat implementation - performs no operations
   // ------------------------------------------------------------
