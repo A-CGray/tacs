@@ -269,9 +269,11 @@ else:
             # Compute the arc-length constraint g = sqrt(du^T du + eta dy^2) - ds
             radius = np.sqrt(du.norm()**2 + eta * dy**2)
             constraint = radius - ds
-            print(
-                f"Increment: {increment:02d}, Iteration: {innerIter:02d}, LoadFactor: {loadFactor: .6e}, Residual: {resNorm: .6e}, Constraint: {constraint: .6e}, uNorm: {u.norm(): .6e}"
-            )
+            uNorm = u.norm()
+            if forceProblem.comm.rank == 0:
+                print(
+                    f"Increment: {increment:02d}, Iteration: {innerIter:02d}, LoadFactor: {loadFactor: .6e}, Residual: {resNorm: .6e}, Constraint: {constraint: .6e}, uNorm: {uNorm: .6e}"
+                )
             if constraintType.lower() == "nonlinear":
                 innerSolverConverged = resNorm < tol and np.abs(constraint) < tol
             elif constraintType.lower() == "linear":
@@ -314,7 +316,8 @@ else:
             alpha = 1.0
             stepSize = alpha * np.sqrt(forceProblem.update.norm()**2 + eta * loadScaleUpdate ** 2)
             if stepSize > ds:
-                print("Limiting step size")
+                if forceProblem.comm.rank == 0:
+                    print("Limiting step size")
                 alpha *= ds / stepSize
             u.axpy(alpha, forceProblem.update)
             loadFactor += alpha * loadScaleUpdate
@@ -338,12 +341,14 @@ else:
             loadFactor = incStartLoadFactor
             ds *= 0.5
             du.copyValues(prevIncStep)
-            print("Step rejected")
+            if forceProblem.comm.rank == 0:
+                print("Step rejected")
         else:
             forceProblem.writeSolution(baseName=f"{forceProblem.name}_{increment:04d}")
             loadFactorHist.append(loadFactor)
             ds *= np.clip(np.sqrt(nIterDes / (innerIter)), 0.25, 4.0)
             ds = np.clip(ds, dsMin, dsMax)
-            print("Step accepted")
+            if forceProblem.comm.rank == 0:
+                print("Step accepted")
             if abs(loadFactor) > maxLoadFactor:
                 break
