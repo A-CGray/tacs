@@ -332,8 +332,10 @@ else:
         # 2. The computed step is in the opposite direction of the initial tangent step for this increment
         rejectIncrement = not innerSolverConverged
         if not rejectIncrement:
-            stepCosine = du.dot(tangentStep) / (
-                du.norm() * tangentStep.norm()
+            # Take the dot product of the converged step with the initial tangent step
+            dot = du.dot(tangentStep) + dLoadFactor * dy
+            stepCosine = dot / (
+                np.sqrt(du.norm()**2+dy**2) * np.sqrt(tangentStep.norm()**2 + dLoadFactor**2)
             )
             rejectIncrement = stepCosine <= 0  # np.cos(np.pi / 16)
         if rejectIncrement:
