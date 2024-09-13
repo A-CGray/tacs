@@ -90,6 +90,15 @@ cdef inline _init_Mat(TACSMat *ptr):
     mat.ptr.incref()
     return mat
 
+cdef class ContinuationPathMat(Mat):
+    cdef TACSContinuationPathMat *cpm
+
+cdef inline _init_ContinuationPathMat(TACSContinuationPathMat *ptr):
+    cpm = ContinuationPathMat()
+    cpm.ptr = ptr
+    cpm.ptr.incref()
+    return cpm
+
 cdef class Pc:
     cdef TACSPc *ptr
 

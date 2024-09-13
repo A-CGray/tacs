@@ -1080,6 +1080,21 @@ cdef class Mat:
 
         return None
 
+cdef class ContinuationPathMat(Mat):
+    def __cinit__(self, Mat mat, Vec r, Vec t, TacsScalar s):
+        self.cpm = new TACSContinuationPathMat(mat.ptr, r.ptr, t.ptr, s)
+        self.cpm.incref()
+        self.ptr = self.cpm
+        return
+
+    def setConstraint(self, TacsScalar s):
+        self.cpm.setConstraint(s)
+        return
+
+    def applyQ(self, Vec x):
+        y = self.cpm.applyQ(x.ptr)
+        return y
+
 # Create a generic preconditioner class
 cdef class Pc:
     def __cinit__(self, Mat mat=None, *args, **kwargs):

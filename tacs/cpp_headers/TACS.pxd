@@ -233,6 +233,16 @@ cdef extern from "TACSSchurMat.h":
         void setMonitorFactorFlag(int)
         void setMonitorBackSolveFlag(int)
 
+cdef extern from "TACSContinuation.h":
+    cdef cppclass TACSContinuationPathMat(TACSMat):
+        TACSContinuationPathMat(TACSMat *const _A, TACSVec *const _r,
+                                TACSVec *const _t, const TacsScalar s)
+        void getVectors(TACSVec **_r, TACSVec **_t)
+        void setConstraint(const TacsScalar s)
+        TacsScalar applyQ(TACSVec *const x)
+        void mult(TACSVec *x, TACSVec *y)
+        TACSVec *createVec()
+
 cdef extern from "TACSMg.h":
     cdef cppclass TACSMg(TACSPc):
         TACSMg(MPI_Comm, int, double, int, int)
