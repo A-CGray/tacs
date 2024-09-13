@@ -977,7 +977,7 @@ class StaticProblem(TACSProblem):
             self.getResidual(res, Fext=Fext)
 
         self.nonlinearSolver.resFunc = resFunc
-        self.nonlinearSolver.setRefNorm(self.initNorm)
+        self.nonlinearSolver.setRefNorm(self.initNorm if self.initNorm > 0.0 else 1.0)
         self.nonlinearSolver.solve(u0=self.u, result=self.u)
 
         # Since the state has changed, we need to flag that the jacobian and preconditioner should be before the next primal or adjoint solve
