@@ -39,8 +39,12 @@
   Furthermore ||Qy||_2 = ||y||_{2}.
 
   Following the approach proposed by Homer F Walker in "An Adaptation of Krylov
-  Subspace Method to Path Following Problems", we choose Q to be a Householder
-  matrix that transforms [t s] to [0 +-norm([t s])]:
+  Subspace Method to Path Following Problems", we choose:
+
+  Qy = H [y]
+  .      [0]
+
+  Where H is a Householder matrix that transforms [t s] to [0 +-norm([t s])]:
 
   Q[x] = [x - 2v v^{T}x] = [x - 2t^{T}x/(tn*tn) t ]
   .      [  - 2w v^{T}x]   [ -2wn t^{T}x/(tn*tn)  ]
