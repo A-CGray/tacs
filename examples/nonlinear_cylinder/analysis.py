@@ -42,7 +42,9 @@ parser.add_argument(
     default="quadratic",
     choices=["linear", "quadratic", "quaternion"],
 )
-parser.add_argument("--incType", type=str, default="arcLength", choices=["arcLength", "load"])
+parser.add_argument(
+    "--incType", type=str, default="load", choices=["arcLength", "load"]
+)
 args = parser.parse_args()
 
 # ==============================================================================
@@ -146,35 +148,45 @@ forceProblem.addLoadToNodes(
     tipNodeID, [0, 0, -MAX_FORCE / 4, 0, 0, 0], nastranOrdering=True
 )
 
+# ==============================================================================
+# Some pre-computation to help us extract the centre displacement
+# ==============================================================================
+
+tipNodeIDLocal = FEAAssembler.meshLoader.getLocalNodeIDsFromGlobal(
+    [tipNodeID], nastranOrdering=True
+)[0]
+hasCentreDisp = tipNodeIDLocal != -1
+dispNodeRank = np.argmax(hasCentreDisp)
+
+
+def getCentreDisp():
+    centreDisp = None
+    if tipNodeIDLocal != -1:
+        centreDisp = forceProblem.u_array[tipNodeIDLocal * 6 + 2]
+    centreDisp = forceProblem.comm.bcast(centreDisp, root=dispNodeRank)
+    return centreDisp
+
+
+results = {"zDisp": [0.0], "loadScale": [0.0]}
+
+
+fileName = f"{STRAIN_TYPE}_{ROTATION_TYPE}_{args.incType}-Incrementation"
+
 if args.incType == "load":
     # ==============================================================================
     # Run analysis with load scales in 5% increments from 5% to 100%
     # ==============================================================================
-    forceFactor = np.arange(0.0, 1.01, 0.05)
+    stepSize = 0.025
+    forceFactor = np.arange(0.025, 1.01, 0.025)
     ForceVec = np.copy(forceProblem.F_array)
-
-    results = {"zDisp": [0.0], "xDisp": [0.0], "yRot": [0.0], "tipForce": [0.0]}
 
     for scale in forceFactor:
         Fext = (scale - 1.0) * ForceVec
         forceProblem.solve(Fext=Fext)
 
-        fileName = f"{STRAIN_TYPE}_{ROTATION_TYPE}"
         forceProblem.writeSolution(outputDir=PWD, baseName=fileName)
-        disps = forceProblem.u_array
-        xDisps = disps[0::6]
-        zDisps = disps[2::6]
-        yRot = disps[4::6]
-        results["tipForce"].append(scale)
-        results["xDisp"].append(xDisps[-1])
-        results["zDisp"].append(zDisps[-1])
-        results["yRot"].append(yRot[-1])
-
-    for key in results:
-        results[key] = np.array(results[key])
-
-    with open(os.path.join(PWD, f"TACS-Disps-{fileName}.pkl"), "wb") as f:
-        pickle.dump(results, f)
+        results["zDisp"].append(getCentreDisp())
+        results["loadScale"].append(scale)
 
 else:
     constraintType = "nonlinear"
@@ -189,14 +201,12 @@ else:
     s = 0.0
     tol = 1e-9
 
-    dsInit = 0.05
+    dsInit = 0.025
     eta = 0.0
     minStep = 0.001
     maxStep = 1.0
     nIterDes = 4
     maxLoadFactor = 1.0
-
-    loadFactorHist = [0.0]
 
     # Compute external force vector
     Fex = FEAAssembler.createVec(asBVec=True)
@@ -207,15 +217,17 @@ else:
 
     # Create continuation path matrix
     dConstraintdu = FEAAssembler.createVec(asBVec=True)
-    dConstraintdLambda = 0.
-    pathMat = TACS.ContinuationPathMat(forceProblem.K, Fex, dConstraintdu, dConstraintdLambda)
+    dConstraintdLambda = 0.0
+    pathMat = TACS.ContinuationPathMat(
+        forceProblem.K, Fex, dConstraintdu, dConstraintdLambda
+    )
     pathSolver = TACS.KSM(
-                    pathMat,
-                    forceProblem.PC,
-                    forceProblem.getOption("subSpaceSize"),
-                    forceProblem.getOption("nRestarts"),
-                    forceProblem.getOption("flexible"),
-                )
+        pathMat,
+        forceProblem.PC,
+        forceProblem.getOption("subSpaceSize"),
+        forceProblem.getOption("nRestarts"),
+        forceProblem.getOption("flexible"),
+    )
     ds = 0.0
 
     # Create other required vectors
@@ -233,7 +245,7 @@ else:
         forceProblem.updatePreconditioner()
         forceProblem.linearSolver.solve(Fex, tangentStep)
         tangentStep.scale(-1.0)
-        tangentNorm2 = tangentStep.norm()**2
+        tangentNorm2 = tangentStep.norm() ** 2
 
         # If this is the first increment, compute the initial arc length step size, interpret the user's input as the desired change in the load factor in the first increment
         if increment == 0:
@@ -241,6 +253,12 @@ else:
             dsMin = np.sqrt(minStep**2 * (eta + tangentNorm2))
             dsMax = np.sqrt(maxStep**2 * (eta + tangentNorm2))
         dLoadFactor = ds / np.sqrt(eta + tangentNorm2)
+
+        # Limit the load factor step size if we're predicted to go way past the maximum load factor
+        if loadFactor + dLoadFactor > maxLoadFactor * 1.05:
+            shrinkFactor = (maxLoadFactor * 1.05 - loadFactor) / dLoadFactor
+            dLoadFactor *= shrinkFactor
+            ds *= shrinkFactor
 
         # Choose between the positive and negative roots of the constraint equation
         if increment > 0:
@@ -267,7 +285,7 @@ else:
             resNorm = forceProblem.res.norm() / abs(loadFactor * FexNorm)
 
             # Compute the arc-length constraint g = sqrt(du^T du + eta dy^2) - ds
-            radius = np.sqrt(du.norm()**2 + eta * dy**2)
+            radius = np.sqrt(du.norm() ** 2 + eta * dy**2)
             constraint = radius - ds
             uNorm = u.norm()
             if forceProblem.comm.rank == 0:
@@ -289,18 +307,20 @@ else:
             forceProblem.res.scale(-1.0)
 
             if constraintType.lower() == "nonlinear":
-                dConstraintdu.copyValues(du)  # ddu(sqrt(du^T du + eta dy^2) - ds) = du / sqrt(du^T du + eta dy^2)
+                dConstraintdu.copyValues(
+                    du
+                )  # ddu(sqrt(du^T du + eta dy^2) - ds) = du / sqrt(du^T du + eta dy^2)
                 dConstraintdu.scale(1 / radius)
                 dConstraintdLambda = eta * dy / radius
                 pathMat.setConstraint(dConstraintdLambda)
                 if constraint != 0:
-                    tBarNorm2 = dConstraintdu.norm()**2 + dConstraintdLambda**2
+                    tBarNorm2 = dConstraintdu.norm() ** 2 + dConstraintdLambda**2
                     a = -constraint / tBarNorm2
                     forceProblem.K.mult(dConstraintdu, forceProblem.update)
                     forceProblem.update.axpy(dConstraintdLambda, Fex)
                     forceProblem.res.axpy(-a, forceProblem.update)
                 else:
-                    a = 0.
+                    a = 0.0
                 pathSolver.solve(forceProblem.res, forceProblem.update)
                 loadScaleUpdate = pathMat.applyQ(forceProblem.update)
                 forceProblem.update.axpy(a, dConstraintdu)
@@ -314,7 +334,9 @@ else:
 
             # Limit any step that is bigger than the arc length constraint radius
             alpha = 1.0
-            stepSize = alpha * np.sqrt(forceProblem.update.norm()**2 + eta * loadScaleUpdate ** 2)
+            stepSize = alpha * np.sqrt(
+                forceProblem.update.norm() ** 2 + eta * loadScaleUpdate**2
+            )
             if stepSize > ds:
                 if forceProblem.comm.rank == 0:
                     print("Limiting step size")
@@ -335,7 +357,8 @@ else:
             # Take the dot product of the converged step with the initial tangent step
             dot = du.dot(tangentStep) + dLoadFactor * dy
             stepCosine = dot / (
-                np.sqrt(du.norm()**2+dy**2) * np.sqrt(tangentStep.norm()**2 + dLoadFactor**2)
+                np.sqrt(du.norm() ** 2 + dy**2)
+                * np.sqrt(tangentStep.norm() ** 2 + dLoadFactor**2)
             )
             rejectIncrement = stepCosine <= 0  # np.cos(np.pi / 16)
         if rejectIncrement:
@@ -346,11 +369,25 @@ else:
             if forceProblem.comm.rank == 0:
                 print("Step rejected")
         else:
-            forceProblem.writeSolution(baseName=f"{forceProblem.name}_{increment:04d}")
-            loadFactorHist.append(loadFactor)
+            forceProblem.writeSolution(outputDir=PWD, baseName=f"{fileName}", number=increment)
+            # forceProblem.writeSolution(baseName=f"{forceProblem.name}_{increment:04d}")
             ds *= np.clip(np.sqrt(nIterDes / (innerIter)), 0.25, 4.0)
             ds = np.clip(ds, dsMin, dsMax)
+            # Save load factor and centre displacement to history
+            results["zDisp"].append(getCentreDisp())
+            results["loadScale"].append(loadFactor)
+
             if forceProblem.comm.rank == 0:
                 print("Step accepted")
             if abs(loadFactor) > maxLoadFactor:
                 break
+
+# Solve has finished, write the equilibrium path to a file
+if forceProblem.comm.rank == 0:
+    print(f"{results=}")
+
+    for key in results:
+        results[key] = np.array(results[key])
+
+    with open(os.path.join(PWD, f"TACS-Disps-{fileName}.pkl"), "wb") as f:
+        pickle.dump(results, f)
