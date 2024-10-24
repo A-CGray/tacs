@@ -309,7 +309,7 @@ else:
             if constraintType.lower() == "nonlinear":
                 dConstraintdu.copyValues(
                     du
-                )  # ddu(sqrt(du^T du + eta dy^2) - ds) = du / sqrt(du^T du + eta dy^2)
+                )  # d/d(du)(sqrt(du^T du + eta dy^2) - ds) = du / sqrt(du^T du + eta dy^2)
                 dConstraintdu.scale(1 / radius)
                 dConstraintdLambda = eta * dy / radius
                 pathMat.setConstraint(dConstraintdLambda)
