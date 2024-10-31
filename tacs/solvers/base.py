@@ -28,7 +28,7 @@ from tacs.utilities import BaseUI, SolverHistory
 class BaseSolver(BaseUI):
     def __init__(
         self,
-        assembler: tacs.TACS.Assembler,
+        createVecFunc: Callable,
         setStateFunc: Callable,
         resFunc: Callable,
         stateVec: Optional[tacs.TACS.Vec] = None,
@@ -40,26 +40,26 @@ class BaseSolver(BaseUI):
 
         Parameters
         ----------
-        assembler : tacs.TACS.Assembler
-            TACS assembler object related to the problem being solved, required in order for the solver to create it's own vectors
+        createVecFunc : function
+            Function to create a new vector object, with signature createVecFunc() -> vector, the vector must have the same interface as a tacs.TACS.Vec
         setStateFunc : function
-            Function to set the state vector, with signature setStateFunc(stateVec: tacs.TACS.Vec) -> None
+            Function to set the state vector, with signature setStateFunc(stateVec: vector) -> None
         resFunc : function
-            Function to evaluate the residual at the current state, with signature `resFunc(resVec: tacs.TACS.Vec) -> None`
-        stateVec : tacs.TACS.Vec, optional
+            Function to evaluate the residual at the current state, with signature `resFunc(resVec: vector) -> None`
+        stateVec : vector, optional
             Vector to store the state in, by default the solver will create it's own but these can be passed to save additional allocations
-        resVec : tacs.TACS.Vec, optional
+        resVec : vector, optional
             Vector to store the residual in, by default the solver will create it's own but these can be passed to save additional allocations
         options : dict, optional
             Dictionary holding solver-specific option parameters (case-insensitive)., by default None
         comm : mpi4py.MPI.Intracomm, optional
             The comm object on which to create the pyTACS object., by default mpi4py.MPI.COMM_WORLD
         """
-        self.assembler = assembler
+        self.createVecFunc = createVecFunc
         self.setStateFunc = setStateFunc
         self.resFunc = resFunc
-        self.stateVec = stateVec if stateVec is not None else self.assembler.createVec()
-        self.resVec = resVec if resVec is not None else self.assembler.createVec()
+        self.stateVec = stateVec if stateVec is not None else self.createVecFunc()
+        self.resVec = resVec if resVec is not None else self.createVecFunc()
         self.refNorm = 1.0
 
         self._hasConverged = False
@@ -159,7 +159,6 @@ class BaseSolver(BaseUI):
         # Initialize the state vector and set the boundary conditions
         if u0 is not None:
             self.stateVec.copyValues(u0)
-        self.assembler.setBCs(self.stateVec)
         self.setStateFunc(self.stateVec)
 
         # Reset the solver history and store the solver options as metadata

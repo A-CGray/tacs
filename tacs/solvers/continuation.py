@@ -167,7 +167,7 @@ class ContinuationSolver(BaseSolver):
 
         BaseSolver.__init__(
             self,
-            assembler=self.innerSolver.assembler,
+            createVecFunc=self.innerSolver.createVecFunc,
             setStateFunc=self.innerSolver.setStateFunc,
             resFunc=self.innerSolver.resFunc,
             stateVec=self.innerSolver.stateVec,
@@ -177,12 +177,12 @@ class ContinuationSolver(BaseSolver):
         )
 
         # Create additional vectors
-        self.fInt = self.assembler.createVec()
-        self.fExt = self.assembler.createVec()
-        self.du_e = self.assembler.createVec()
-        self.du_i = self.assembler.createVec()
-        self.predictorStep = self.assembler.createVec()
-        self.incStartState = self.assembler.createVec()
+        self.fInt = self.createVecFunc()
+        self.fExt = self.createVecFunc()
+        self.du_e = self.createVecFunc()
+        self.du_i = self.createVecFunc()
+        self.predictorStep = self.createVecFunc()
+        self.incStartState = self.createVecFunc()
 
     @property
     def resFunc(self) -> Callable:
@@ -218,7 +218,7 @@ class ContinuationSolver(BaseSolver):
         self.equilibriumPathLoadScales = []
         if self.getOption("UsePredictor"):
             for _ in range(self.getOption("NumPredictorStates")):
-                self.equilibriumPathStates.append(self.assembler.createVec())
+                self.equilibriumPathStates.append(self.createVecFunc())
                 self.equilibriumPathLoadScales.append(None)
 
     def setOption(self, name: str, value: Any) -> None:

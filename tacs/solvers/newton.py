@@ -138,7 +138,7 @@ class NewtonSolver(BaseSolver):
 
     def __init__(
         self,
-        assembler: tacs.TACS.Assembler,
+        createVecFunc: Callable,
         setStateFunc: Callable,
         resFunc: Callable,
         jacFunc: Callable,
@@ -153,8 +153,8 @@ class NewtonSolver(BaseSolver):
 
         Parameters
         ----------
-        assembler : tacs.TACS.Assembler
-            TACS assembler object related to the problem being solved, required in order for the solver to create it's own vectors
+        createVecFunc : function
+            Function to create a new vector object, with signature createVecFunc() -> vector, the vector must have the same interface as a tacs.TACS.Vec
         setStateFunc : function
             Function to set the state vector, with signature setStateFunc(stateVec: tacs.TACS.Vec) -> None
         resFunc : function
@@ -176,7 +176,7 @@ class NewtonSolver(BaseSolver):
         """
         BaseSolver.__init__(
             self,
-            assembler=assembler,
+            createVecFunc=createVecFunc,
             setStateFunc=setStateFunc,
             resFunc=resFunc,
             stateVec=stateVec,
@@ -189,7 +189,7 @@ class NewtonSolver(BaseSolver):
         self.linearSolver = linearSolver
 
         # Create additional vectors
-        self.update = self.assembler.createVec()
+        self.update = self.createVecFunc()
 
     def setOption(self, name, value):
         """A thin wrapper around the base setOption method that makes necessary changes when certain options are changed
