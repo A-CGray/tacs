@@ -207,7 +207,7 @@ class StaticProblem(TACSProblem):
 
                 # Create Newton solver, the inner solver for the continuation solver
                 newtonSolver = tacs.solvers.NewtonSolver(
-                    assembler=self.assembler,
+                    createVecFunc=self.assembler.createVec,
                     setStateFunc=self.setVariables,
                     resFunc=self.getResidual,
                     jacFunc=self.updateJacobian,
@@ -253,8 +253,10 @@ class StaticProblem(TACSProblem):
         self.adjRHS = self.assembler.createVec()
 
         # Load vector
-        self.F = self.assembler.createVec()
-        self.F_array = self.F.getArray()
+        # Don't create a new F vector if it already exists
+        if not hasattr(self, "F"):
+            self.F = self.assembler.createVec()
+            self.F_array = self.F.getArray()
 
         # State variable vector
         self.u = self.assembler.createVec()
