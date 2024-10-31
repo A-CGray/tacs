@@ -253,7 +253,7 @@ class NewtonSolver(BaseSolver):
 
         return variables
 
-    def setConvergenceTolerance(
+    def setConvergenceTolerances(
         self, absTol: Optional[float] = None, relTol: Optional[float] = None
     ) -> None:
         """Set the convergence tolerance of the solver

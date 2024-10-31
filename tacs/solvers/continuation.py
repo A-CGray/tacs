@@ -231,7 +231,7 @@ class ContinuationSolver(BaseSolver):
         ]:
             self._setupPredictorVectors()
 
-    def setConvergenceTolerance(
+    def setConvergenceTolerances(
         self, absTol: Optional[float] = None, relTol: Optional[float] = None
     ) -> None:
         """Set the convergence tolerance of the solver
@@ -378,7 +378,7 @@ class ContinuationSolver(BaseSolver):
             else:
                 rtol = COARSE_REL_TOL
                 atol = COARSE_ABS_TOL
-            self.innerSolver.setConvergenceTolerance(absTol=atol, relTol=rtol)
+            self.innerSolver.setConvergenceTolerances(absTol=atol, relTol=rtol)
 
             # Before calling the inner solver we need to create a callback function so that we can store data in this solver's history file at every iteration of the inner solver
             def continuationcallBack(solver, u, res, monitorVars):
@@ -394,7 +394,8 @@ class ContinuationSolver(BaseSolver):
 
             self.innerSolver.setCallback(continuationcallBack)
 
-            self.innerSolver.setRefNorm(self.refNorm * currentLambda)
+            innerRefNorm = self.refNorm * currentLambda
+            self.innerSolver.setRefNorm(innerRefNorm if innerRefNorm > 0 else 1.0)
             self.innerSolver.solve()
             success = self.innerSolver.hasConverged
             numIters = self.innerSolver.iterationCount

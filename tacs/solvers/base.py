@@ -131,10 +131,10 @@ class BaseSolver(BaseUI):
         """
 
     @abc.abstractmethod
-    def setConvergenceTolerance(
+    def setConvergenceTolerances(
         self, absTol: Optional[float] = None, relTol: Optional[float] = None
     ) -> None:
-        """Set the convergence tolerance of the solver
+        """Set the convergence tolerances of the solver
 
         Parameters
         ----------
