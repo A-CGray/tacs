@@ -91,6 +91,7 @@ OUTPUT_STRAINS = TACS_OUTPUT_STRAINS
 OUTPUT_STRESSES = TACS_OUTPUT_STRESSES
 OUTPUT_EXTRAS = TACS_OUTPUT_EXTRAS
 OUTPUT_LOADS = TACS_OUTPUT_LOADS
+OUTPUT_COORDINATE_FRAME = TACS_OUTPUT_COORDINATE_FRAME
 
 LAYOUT_NONE = TACS_LAYOUT_NONE
 POINT_ELEMENT = TACS_POINT_ELEMENT
@@ -1628,7 +1629,7 @@ cdef class Assembler:
 
         return
 
-    def getAverageStresses(self):
+    def getAverageStresses(self, int compNum):
         cdef Element elem
         cdef ElementType elem_type
         cdef np.ndarray stresses
@@ -1636,7 +1637,7 @@ cdef class Assembler:
         stresses = np.zeros((9), dtype=dtype)
         elem = self.getElements()[0]
         elem_type = elem.getElementType()
-        self.ptr.getAverageStresses(elem_type, <TacsScalar*>stresses.data)
+        self.ptr.getAverageStresses(elem_type, <TacsScalar*>stresses.data, compNum)
         return stresses
 
     def setDependentNodes(self,

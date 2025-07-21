@@ -32,6 +32,7 @@ cdef extern from "TACSElementTypes.h":
         TACS_OUTPUT_STRESSES
         TACS_OUTPUT_EXTRAS
         TACS_OUTPUT_LOADS
+        TACS_OUTPUT_COORDINATE_FRAME
 
     enum ElementType:
         TACS_ELEMENT_NONE
@@ -348,7 +349,7 @@ cdef extern from "TACSAssembler.h":
         int getNumElements()
         TACSNodeMap *getNodeMap()
         TACSBcMap *getBcMap()
-        void getAverageStresses(ElementType elem_type, TacsScalar *avgStresses)
+        void getAverageStresses(ElementType elem_type, TacsScalar *avgStresses, int compNum)
         void setComplexStepGmatrix(bool flag)
         TACSElement **getElements()
         TACSElement *getElement(int, TacsScalar*, TacsScalar*,
