@@ -393,14 +393,6 @@ class StaticProblem(TACSProblem):
         value : depends on option
             New option value to set
         """
-        # Updated deprecated option
-        if name.lower() == "ksmsolver":
-            name = "linearSolver"
-            warnings.warn(
-                "'KSMSolver' option will be deprecated starting in tacs 3.7.0. "
-                "Please use `linearSolver` option instead.",
-                DeprecationWarning,
-            )
 
         # Default setOption for common problem class objects
         TACSProblem.setOption(self, name, value)
