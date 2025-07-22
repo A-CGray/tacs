@@ -26,31 +26,7 @@ import mpi4py
 # ==============================================================================
 import tacs.TACS
 from tacs.solvers import BaseSolver
-
-
-def lagrangeInterp(xKnown, yKnown, xQuery, yQuery):
-    """Interpolate an array using lagrange polynomials
-
-    Parameters
-    ----------
-    xKnown : iterable of length n
-        scalar x values of known points
-    yKnown : iterable of n np.ndarrays
-        arrays at known points
-    xQuery : float
-        x value to interpolate at
-    yQuery : np.ndarray
-        array to store interpolated result in
-    """
-    numPoints = len(xKnown)
-    yQuery[:] = 0.0
-    yTemp = np.zeros_like(yQuery)
-    for jj in range(numPoints):
-        yTemp[:] = 1.0
-        for mm in range(numPoints):
-            if mm != jj:
-                yTemp[:] = yTemp[:] * (xQuery - xKnown[mm]) / (xKnown[jj] - xKnown[mm])
-        yQuery[:] = yQuery[:] + yKnown[jj] * yTemp
+from tacs.solvers.utils import lagrangeInterp
 
 
 class ContinuationSolver(BaseSolver):
@@ -191,6 +167,11 @@ class ContinuationSolver(BaseSolver):
     @resFunc.setter
     def resFunc(self, resFunc: Callable) -> None:
         self.innerSolver.resFunc = resFunc
+
+    def updateOperators(self, mat: tacs.TACS.Mat, pc: tacs.TACS.Pc) -> None:
+        self.linearSolver.setOperators(mat, pc)
+        if self.innerSolver:
+            self.innerSolver.updateOperators(mat, pc)
 
     def getHistoryVariables(self) -> Dict[str, Dict]:
         """Get the variables to be stored in the solver history

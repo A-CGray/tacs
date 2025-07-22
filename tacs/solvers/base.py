@@ -203,3 +203,19 @@ class BaseSolver(BaseUI):
             - ``monitorVars`` is a dictionary of variables to monitor, which can be specified through the ``"nonlinearSolverMonitorVars"`` option
         """
         self.userCallback = callback
+
+    def updateOperators(self, mat: tacs.TACS.Mat, pc: tacs.TACS.Pc) -> None:
+        """
+        Update the matrix and preconditioner operators used by the solver.
+
+        This base implementation does nothing and should be overridden by solvers
+        that contain linear solvers.
+
+        Parameters
+        ----------
+        mat : tacs.TACS.Mat
+            The matrix operator
+        pc : tacs.TACS.Pc
+            The preconditioner
+        """
+        pass

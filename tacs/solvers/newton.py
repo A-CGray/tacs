@@ -191,6 +191,9 @@ class NewtonSolver(BaseSolver):
         # Create additional vectors
         self.update = self.createVecFunc()
 
+    def updateOperators(self, mat: tacs.TACS.Mat, pc: tacs.TACS.Pc) -> None:
+        self.linearSolver.setOperators(mat, pc)
+
     def setOption(self, name, value):
         """A thin wrapper around the base setOption method that makes necessary changes when certain options are changed
 
