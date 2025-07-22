@@ -217,7 +217,7 @@ class StaticProblem(TACSProblem):
                     createVecFunc=self.assembler.createVec,
                     setStateFunc=self.setVariables,
                     resFunc=self.getResidual,
-                    jacFunc=self.updateJacobian,
+                    jacUpdateFunc=self.updateJacobian,
                     pcUpdateFunc=self.updatePreconditioner,
                     linearSolver=newtonLinearSolver,
                     comm=self.comm,
@@ -225,7 +225,7 @@ class StaticProblem(TACSProblem):
 
                 # And now create the continuation solver
                 self.nonlinearSolver = tacs.solvers.ContinuationSolver(
-                    jacFunc=self.updateJacobian,
+                    jacUpdateFunc=self.updateJacobian,
                     pcUpdateFunc=self.updatePreconditioner,
                     linearSolver=continuationLinearSolver,
                     setLambdaFunc=self.setLoadScale,

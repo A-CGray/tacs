@@ -124,7 +124,7 @@ class ContinuationSolver(BaseSolver):
 
     def __init__(
         self,
-        jacFunc: Callable,
+        jacUpdateFunc: Callable,
         pcUpdateFunc: Callable,
         linearSolver: tacs.TACS.KSM,
         setLambdaFunc: Callable,
@@ -137,8 +137,8 @@ class ContinuationSolver(BaseSolver):
 
         Parameters
         ----------
-        jacFunc : function
-            Function to update the residual Jacobian at the current state, with signature `jacFunc() -> None`
+        jacUpdateFunc : function
+            Function to update the residual Jacobian at the current state, with signature `jacUpdateFunc() -> None`
         pcUpdateFunc : function
             Function to update the residual Jacobian preconditioner at the current state, with signature `pcUpdateFunc() -> None`
         linearSolver : tacs.TACS.KSM
@@ -155,7 +155,7 @@ class ContinuationSolver(BaseSolver):
             The comm object on which to create the pyTACS object., by default mpi4py.MPI.COMM_WORLD
         """
 
-        self.jacFunc = jacFunc
+        self.jacUpdateFunc = jacUpdateFunc
         self.pcUpdateFunc = pcUpdateFunc
         self.linearSolver = linearSolver
         self.setLambdaFunc = setLambdaFunc
@@ -305,7 +305,7 @@ class ContinuationSolver(BaseSolver):
         # Where: Fe = external force, Fi = internal force, dUi = inv(K) * Fi, dUe = inv(K) * Fe
         isRestartIncrement = False
         if np.real(self.stateVec.norm()) > 0 and np.real(self.fExt.norm()) > 0.0:
-            self.jacFunc()
+            self.jacUpdateFunc()
             self.pcUpdateFunc()
             self.linearSolver.solve(self.fExt, self.du_e)
             self.linearSolver.solve(self.fInt, self.du_i)

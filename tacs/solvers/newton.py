@@ -141,7 +141,7 @@ class NewtonSolver(BaseSolver):
         createVecFunc: Callable,
         setStateFunc: Callable,
         resFunc: Callable,
-        jacFunc: Callable,
+        jacUpdateFunc: Callable,
         pcUpdateFunc: Callable,
         linearSolver: tacs.TACS.KSM,
         stateVec: Optional[tacs.TACS.Vec] = None,
@@ -159,8 +159,8 @@ class NewtonSolver(BaseSolver):
             Function to set the state vector, with signature setStateFunc(stateVec: tacs.TACS.Vec) -> None
         resFunc : function
             Function to evaluate the residual at the current state, with signature resFunc(resVec: tacs.TACS.Vec) -> None
-        jacFunc : function
-            Function to update the residual Jacobian at the current state, with signature jacFunc() -> None
+        jacUpdateFunc : function
+            Function to update the residual Jacobian at the current state, with signature jacUpdateFunc() -> None
         pcUpdateFunc : function
             Function to update the residual Jacobian preconditioner at the current state, with signature pcUpdateFunc() -> None
         linearSolver : tacs.TACS.KSM
@@ -184,7 +184,7 @@ class NewtonSolver(BaseSolver):
             options=options,
             comm=comm,
         )
-        self.jacFunc = jacFunc
+        self.jacUpdateFunc = jacUpdateFunc
         self.pcUpdateFunc = pcUpdateFunc
         self.linearSolver = linearSolver
 
@@ -357,7 +357,7 @@ class NewtonSolver(BaseSolver):
                 break
 
             # Update Jacobian
-            self.jacFunc()
+            self.jacUpdateFunc()
 
             # Update preconditioner, or skip if last linear solve converged in few enough iterations
             if iteration > 0 and linearSolveIterations <= MAX_LIN_ITERS:
