@@ -141,6 +141,8 @@ class ContinuationSolver(BaseSolver):
         self.equilibriumPathStates = []
         self.equilibriumPathLoadScales = []
 
+        self.incrementCallback: Optional[Callable] = None
+
         BaseSolver.__init__(
             self,
             createVecFunc=self.innerSolver.createVecFunc,
@@ -167,6 +169,22 @@ class ContinuationSolver(BaseSolver):
     @resFunc.setter
     def resFunc(self, resFunc: Callable) -> None:
         self.innerSolver.resFunc = resFunc
+
+    def setIncrementCallback(
+        self, incrementCallback: Optional[Callable] = None
+    ) -> Optional[bool]:
+        """
+        Set the user-defined callback function to be called at the end of each successful increment.
+
+        Parameters
+        ----------
+        incrementCallback : callable, optional
+            The user-defined callback function. The callback function should have the following signature:
+            `callback(solver: BaseSolver, u: tacs.TACS.Vec, res: tacs.TACS.Vec, monitorVars: dict) -> Optional[bool]`
+            If the function returns True, the solver will terminate the solution, you can use this to implement your own
+            termination criteria.
+        """
+        self.incrementCallback = incrementCallback
 
     def updateOperators(self, mat: tacs.TACS.Mat, pc: tacs.TACS.Pc) -> None:
         self.linearSolver.setOperators(mat, pc)
@@ -370,10 +388,10 @@ class ContinuationSolver(BaseSolver):
                 if self.rank == 0:
                     self.history.write(monitorVars)
 
-                if self.userCallback is not None:
-                    self.userCallback(solver, u, res, monitorVars)
+                if self.iterationCallback is not None:
+                    self.iterationCallback(solver, u, res, monitorVars)
 
-            self.innerSolver.setCallback(continuationcallBack)
+            self.innerSolver.setIterationCallback(continuationcallBack)
 
             innerRefNorm = self.refNorm * currentLambda
             self.innerSolver.setRefNorm(innerRefNorm if innerRefNorm > 0 else 1.0)
@@ -412,6 +430,15 @@ class ContinuationSolver(BaseSolver):
                 # If inner solver converged and we're at the max load scale then we're done
                 if currentLambda == MAX_LAMBDA:
                     self._hasConverged = True
+                    if self.incrementCallback is not None:
+                        monitorVars = {
+                            "Increment": increment,
+                            "Lambda": currentLambda,
+                            "SubIter": numIters,
+                        }
+                        self.incrementCallback(
+                            self, self.stateVec, self.resVec, monitorVars
+                        )
                     break
                 else:
                     if numIters != 0:
@@ -426,6 +453,18 @@ class ContinuationSolver(BaseSolver):
 
                         self.equilibriumPathLoadScales.pop(0)
                         self.equilibriumPathLoadScales.append(currentLambda)
+
+                    if self.incrementCallback is not None:
+                        monitorVars = {
+                            "Increment": increment,
+                            "Lambda": currentLambda,
+                            "SubIter": numIters,
+                        }
+                        terminate = self.incrementCallback(
+                            self, self.stateVec, self.resVec, monitorVars
+                        )
+                        if terminate:
+                            break
 
             maxStep = min(np.abs(MAX_LAMBDA - currentLambda), MAX_STEP)
             stepSize = np.clip(stepSize, MIN_STEP, maxStep)
