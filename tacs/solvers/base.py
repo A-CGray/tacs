@@ -69,7 +69,7 @@ class BaseSolver(BaseUI):
 
         # No solver history for now
         self.history = None
-        self.userCallback = None
+        self.iterationCallback = None
 
     def _createSolverHistory(self):
         """Setup the solver history object based on the current options
@@ -188,7 +188,7 @@ class BaseSolver(BaseUI):
         """
         self.refNorm = norm
 
-    def setCallback(self, callback: Callable) -> None:
+    def setIterationCallback(self, callback: Callable) -> None:
         """Set a callback function to be called at each iteration
 
         Parameters
@@ -202,7 +202,7 @@ class BaseSolver(BaseUI):
             - ``res`` is the current residual vector
             - ``monitorVars`` is a dictionary of variables to monitor, which can be specified through the ``"nonlinearSolverMonitorVars"`` option
         """
-        self.userCallback = callback
+        self.iterationCallback = callback
 
     def updateOperators(self, mat: tacs.TACS.Mat, pc: tacs.TACS.Pc) -> None:
         """

@@ -268,7 +268,7 @@ class StaticProblem(TACSProblem):
                     "Unknown nonlinearIncType option. Valid options are "
                     "'Load' or 'ArcLength'"
                 )
-            self.nonlinearSolver.setCallback(self._nonlinearCallback)
+            self.nonlinearSolver.setIterationCallback(self._nonlinearCallback)
 
     def _createVariables(self):
         """Internal to create the variable required by TACS"""

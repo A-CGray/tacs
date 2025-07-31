@@ -350,8 +350,8 @@ class NewtonSolver(BaseSolver):
             if self.rank == 0:
                 self.history.write(monitorVars)
 
-            if self.userCallback is not None:
-                self.userCallback(self, self.stateVec, self.resVec, monitorVars)
+            if self.iterationCallback is not None:
+                self.iterationCallback(self, self.stateVec, self.resVec, monitorVars)
 
             flags = ""
 
