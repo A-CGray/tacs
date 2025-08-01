@@ -43,7 +43,7 @@ parser.add_argument(
     choices=["linear", "quadratic", "quaternion"],
 )
 parser.add_argument(
-    "--incType", type=str, default="load", choices=["arcLength", "load"]
+    "--incType", type=str, default="arcLength", choices=["arcLength", "load"]
 )
 args = parser.parse_args()
 
@@ -112,20 +112,25 @@ FEAAssembler.initialize(elemCallBack)
 probOptions = {
     "printTiming": True,
     "printLevel": 1,
-}
-newtonOptions = {"useEW": True, "MaxLinIters": 10}
-continuationOptions = {
-    "CoarseRelTol": 1e-3,
-    "InitialStep": 0.05,
-    "UsePredictor": True,
-    "NumPredictorStates": 7,
+    "nonlinearIncType": "ArcLength" if args.incType == "arcLength" else "Load",
 }
 forceProblem = FEAAssembler.createStaticProblem("PointForce", options=probOptions)
-try:
-    forceProblem.nonlinearSolver.innerSolver.setOptions(newtonOptions)
-    forceProblem.nonlinearSolver.setOptions(continuationOptions)
-except AttributeError:
-    pass
+
+if forceProblem.isNonlinear:
+    newtonOptions = {"useEW": True, "MaxLinIters": 10}
+    continuationOptions = {
+        "CoarseRelTol": 1e-3,
+        "InitialStep": 0.05,
+        "UsePredictor": True,
+        "NumPredictorStates": 7,
+    }
+    arcLengthOptions = {"eta": 0.10}
+    arcLengthOptions.update(continuationOptions)
+    if args.incType == "arcLength":
+        forceProblem.nonlinearSolver.setOptions(arcLengthOptions)
+    else:
+        forceProblem.nonlinearSolver.setOptions(continuationOptions)
+        forceProblem.nonlinearSolver.innerSolver.setOptions(newtonOptions)
 
 # ==============================================================================
 # Add point load
@@ -189,198 +194,18 @@ if args.incType == "load":
         results["loadScale"].append(scale)
 
 else:
-    constraintType = "nonlinear"
-    maxInc = 1000
-    maxIter = 20
-    forceProblem.zeroVariables()
-    u = forceProblem.u
-    du = FEAAssembler.createVec(asBVec=True)
-    incStartDisp = FEAAssembler.createVec(asBVec=True)
-    incStartDisp.copyValues(u)
-    loadFactor = 0.0
-    s = 0.0
-    tol = 1e-9
+    # Set an increment callback to write the solution at each increment
+    def incrementCallback(solver, u, resVec, monitorVars):
+        # Write the solution to a file
+        forceProblem.writeSolution(
+            baseName=f"{STRAIN_TYPE}_{ROTATION_TYPE}_{args.incType}-Incrementation-{solver.iterationCount}"
+        )
+        results["zDisp"].append(getCentreDisp())
+        results["loadScale"].append(forceProblem.loadScale)
+        # return abs(results["zDisp"][-1]) > 0.02
 
-    dsInit = 0.025
-    eta = 0.0
-    minStep = 0.001
-    maxStep = 1.0
-    nIterDes = 4
-    maxLoadFactor = 1.0
-
-    # Compute external force vector
-    Fex = FEAAssembler.createVec(asBVec=True)
-    Fin = FEAAssembler.createVec(asBVec=True)
-    forceProblem.getForces(Fex, Fin)
-    Fex.scale(-1.0)
-    FexNorm = Fex.norm()
-
-    # Create continuation path matrix
-    dConstraintdu = FEAAssembler.createVec(asBVec=True)
-    dConstraintdLambda = 0.0
-    pathMat = TACS.ContinuationPathMat(
-        forceProblem.K, Fex, dConstraintdu, dConstraintdLambda
-    )
-    pathSolver = TACS.KSM(
-        pathMat,
-        forceProblem.PC,
-        forceProblem.getOption("subSpaceSize"),
-        forceProblem.getOption("nRestarts"),
-        forceProblem.getOption("flexible"),
-    )
-    ds = 0.0
-
-    # Create other required vectors
-    prevIncStep = FEAAssembler.createVec(asBVec=True)
-    tangentStep = FEAAssembler.createVec(asBVec=True)
-    incStartDisp = FEAAssembler.createVec(asBVec=True)
-
-    for increment in range(maxInc):
-        prevIncStep.copyValues(du)
-        incStartDisp.copyValues(u)
-        incStartLoadFactor = loadFactor
-
-        # Compute initial guess for the next increment
-        forceProblem.updateJacobian()
-        forceProblem.updatePreconditioner()
-        forceProblem.linearSolver.solve(Fex, tangentStep)
-        tangentStep.scale(-1.0)
-        tangentNorm2 = tangentStep.norm() ** 2
-
-        # If this is the first increment, compute the initial arc length step size, interpret the user's input as the desired change in the load factor in the first increment
-        if increment == 0:
-            ds = np.sqrt(dsInit**2 * (eta + tangentNorm2))
-            dsMin = np.sqrt(minStep**2 * (eta + tangentNorm2))
-            dsMax = np.sqrt(maxStep**2 * (eta + tangentNorm2))
-        dLoadFactor = ds / np.sqrt(eta + tangentNorm2)
-
-        # Limit the load factor step size if we're predicted to go way past the maximum load factor
-        if loadFactor + dLoadFactor > maxLoadFactor * 1.05:
-            shrinkFactor = (maxLoadFactor * 1.05 - loadFactor) / dLoadFactor
-            dLoadFactor *= shrinkFactor
-            ds *= shrinkFactor
-
-        # Choose between the positive and negative roots of the constraint equation
-        if increment > 0:
-            if prevIncStep.dot(tangentStep) < 0:
-                dLoadFactor *= -1
-
-        # Take the tangent step
-        loadFactor += dLoadFactor
-        tangentStep.scale(dLoadFactor)
-        u.axpy(1.0, tangentStep)
-
-        du.copyValues(u)
-        du.axpy(-1.0, incStartDisp)
-        dy = loadFactor - incStartLoadFactor
-
-        # Now do a Newton solve to find the equilibrium state
-        innerSolverConverged = False
-        for innerIter in range(maxIter):
-            forceProblem.setVariables(u)
-            forceProblem.setLoadScale(loadFactor)
-
-            # Compute the residual
-            forceProblem.getResidual(forceProblem.res)
-            resNorm = forceProblem.res.norm() / abs(loadFactor * FexNorm)
-
-            # Compute the arc-length constraint g = sqrt(du^T du + eta dy^2) - ds
-            radius = np.sqrt(du.norm() ** 2 + eta * dy**2)
-            constraint = radius - ds
-            uNorm = u.norm()
-            if forceProblem.comm.rank == 0:
-                print(
-                    f"Increment: {increment:02d}, Iteration: {innerIter:02d}, LoadFactor: {loadFactor: .6e}, Residual: {resNorm: .6e}, Constraint: {constraint: .6e}, uNorm: {uNorm: .6e}"
-                )
-            if constraintType.lower() == "nonlinear":
-                innerSolverConverged = resNorm < tol and np.abs(constraint) < tol
-            elif constraintType.lower() == "linear":
-                innerSolverConverged = resNorm < tol
-            if innerSolverConverged:
-                break
-
-            # Build then solve the N+1 system matrix
-            # [ KT   | -Fex ] [ du ] = [ -res ]
-            # [ dgdu | dgdy ] [ dy ] = [ -constraint ]
-            forceProblem.updateJacobian()
-            forceProblem.updatePreconditioner()
-            forceProblem.res.scale(-1.0)
-
-            if constraintType.lower() == "nonlinear":
-                dConstraintdu.copyValues(
-                    du
-                )  # d/d(du)(sqrt(du^T du + eta dy^2) - ds) = du / sqrt(du^T du + eta dy^2)
-                dConstraintdu.scale(1 / radius)
-                dConstraintdLambda = eta * dy / radius
-                pathMat.setConstraint(dConstraintdLambda)
-                if constraint != 0:
-                    tBarNorm2 = dConstraintdu.norm() ** 2 + dConstraintdLambda**2
-                    a = -constraint / tBarNorm2
-                    forceProblem.K.mult(dConstraintdu, forceProblem.update)
-                    forceProblem.update.axpy(dConstraintdLambda, Fex)
-                    forceProblem.res.axpy(-a, forceProblem.update)
-                else:
-                    a = 0.0
-                pathSolver.solve(forceProblem.res, forceProblem.update)
-                loadScaleUpdate = pathMat.applyQ(forceProblem.update)
-                forceProblem.update.axpy(a, dConstraintdu)
-                loadScaleUpdate += a * dConstraintdLambda
-            elif constraintType.lower() == "linear":
-                if innerIter == 0:
-                    dConstraintdu.copyValues(tangentStep)
-                    pathMat.setConstraint(dLoadFactor)
-                pathSolver.solve(forceProblem.res, forceProblem.update)
-                loadScaleUpdate = pathMat.applyQ(forceProblem.update)
-
-            # Limit any step that is bigger than the arc length constraint radius
-            alpha = 1.0
-            stepSize = alpha * np.sqrt(
-                forceProblem.update.norm() ** 2 + eta * loadScaleUpdate**2
-            )
-            if stepSize > ds:
-                if forceProblem.comm.rank == 0:
-                    print("Limiting step size")
-                alpha *= ds / stepSize
-            u.axpy(alpha, forceProblem.update)
-            loadFactor += alpha * loadScaleUpdate
-
-            # Update the displacement and load factor change for the current increment
-            du.copyValues(u)
-            du.axpy(-1.0, incStartDisp)
-            dy = loadFactor - incStartLoadFactor
-
-        # End of increment, check if we should accept the step, we shouldn't accept if:
-        # 1. The inner solver didn't converge
-        # 2. The computed step is in the opposite direction of the initial tangent step for this increment
-        rejectIncrement = not innerSolverConverged
-        if not rejectIncrement:
-            # Take the dot product of the converged step with the initial tangent step
-            dot = du.dot(tangentStep) + dLoadFactor * dy
-            stepCosine = dot / (
-                np.sqrt(du.norm() ** 2 + dy**2)
-                * np.sqrt(tangentStep.norm() ** 2 + dLoadFactor**2)
-            )
-            rejectIncrement = stepCosine <= 0  # np.cos(np.pi / 16)
-        if rejectIncrement:
-            u.copyValues(incStartDisp)
-            loadFactor = incStartLoadFactor
-            ds *= 0.5
-            du.copyValues(prevIncStep)
-            if forceProblem.comm.rank == 0:
-                print("Step rejected")
-        else:
-            forceProblem.writeSolution(outputDir=PWD, baseName=f"{fileName}", number=increment)
-            # forceProblem.writeSolution(baseName=f"{forceProblem.name}_{increment:04d}")
-            ds *= np.clip(np.sqrt(nIterDes / (innerIter)), 0.25, 4.0)
-            ds = np.clip(ds, dsMin, dsMax)
-            # Save load factor and centre displacement to history
-            results["zDisp"].append(getCentreDisp())
-            results["loadScale"].append(loadFactor)
-
-            if forceProblem.comm.rank == 0:
-                print("Step accepted")
-            if abs(loadFactor) > maxLoadFactor:
-                break
+    forceProblem.nonlinearSolver.setIncrementCallback(incrementCallback)
+    forceProblem.solve()
 
 # Solve has finished, write the equilibrium path to a file
 if forceProblem.comm.rank == 0:

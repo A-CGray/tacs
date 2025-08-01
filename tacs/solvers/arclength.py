@@ -27,10 +27,20 @@ from tacs.solvers.utils import lagrangeInterp
 
 class ArcLengthSolver(BaseSolver):
     defaultOptions = {
+        "UseLinearConstraint": [
+            bool,
+            False,
+            "By default, the Arc-Length solver will use the true nonlinear arc length constraint. If set to true, the solver uses a linearised version of the constraint, where the increment solution is constrained to lie on a line orthogonal to the initial tangent step, this is also known as the Riks method.",
+        ],
         "MaxLambda": [
             float,
             1.0,
             "Final continuation parameter value to aim for.",
+        ],
+        "eta": [
+            float,
+            0.0,
+            "Arc-length constraint parameter. Controls the weight of the load factor change in the arc-length constraint. The eta value given by the user is interpreted as the desired contribution of the load factor change to the arc-length of the first tangent step, relative to the displacement change. In other words, the weight, w, is chosen such that w*dLambda = eta * ||du||^2, where ||du|| is the norm of the displacement change in the first tangent step. eta=0 corresponds to the cylindrical arc-length method, eta->inf corresponds to pure load incrementation.",
         ],
         "AbsTol": [
             float,
@@ -42,25 +52,30 @@ class ArcLengthSolver(BaseSolver):
             1e-8,
             "Relative convergence criteria for the nonlinear residual norm, norm is measured relative to that of the external load vector.",
         ],
+        "DivergenceTol": [
+            float,
+            1e10,
+            "Residual norm at which the nonlinear solver is jugded to have diverged",
+        ],
         "CoarseAbsTol": [
             float,
-            1e-4,
-            "Residual norm criteria for intermediate continuation steps, making this larger may speed up the nonlinear solver by allowing it to only partially converge intermediate steps.",
+            1e-8,
+            "Residual norm criteria for intermediate increments, making this larger may speed up the nonlinear solver by allowing it to only partially converge intermediate steps.",
         ],
         "CoarseRelTol": [
             float,
-            1e-4,
-            "Relative residual norm criteria for intermediate load increments.",
+            1e-8,
+            "Relative residual norm criteria for intermediate increments.",
         ],
         "TargetIter": [
             int,
             8,
-            "Target number of Newton iterations for each continuation increment.",
+            "Target number of Newton iterations for each increment.",
         ],
-        "MaxIter": [int, 30, "Maximum number of continuation steps."],
-        "InitialStep": [float, 0.2, "Initial continuation step size."],
-        "MinStep": [float, 1e-4, "Minimum continuation step size."],
-        "MaxStep": [float, np.inf, "Maximum continuation step size."],
+        "MaxIter": [int, 30, "Maximum number of increments."],
+        "InitialStep": [float, 0.2, "Target initial load factor for first increment."],
+        "MinStep": [float, 1e-4, "Minimum arc-length step size."],
+        "MaxStep": [float, np.inf, "Maximum arc-length step size."],
         "MinStepFactor": [
             float,
             0.5,
@@ -147,6 +162,8 @@ class ArcLengthSolver(BaseSolver):
         self.equilibriumPathLoadScales: list[Union[float, None]] = []
         self.equilibriumPathLengths: list[Union[float, None]] = []
 
+        self.incrementCallback: Optional[Callable] = None
+
         BaseSolver.__init__(
             self,
             resFunc=resFunc,
@@ -195,13 +212,31 @@ class ArcLengthSolver(BaseSolver):
 
         # The Jacobian within pathMat is immutable, so we must create a new instance
         # using the new matrix. We can reuse the other vectors.
-        dgdLambda = self.pathMat.getConstraint()  # Preserve the existing constraint value
+        dgdLambda = (
+            self.pathMat.getConstraint()
+        )  # Preserve the existing constraint value
         self.pathMat = tacs.TACS.ContinuationPathMat(
             mat, self.Fex, self.dgdu, dgdLambda
         )
 
         # Update the path solver to use the new path matrix and preconditioner
         self.pathSolver.setOperators(self.pathMat, pc)
+
+    def setIncrementCallback(
+        self, incrementCallback: Optional[Callable] = None
+    ) -> Optional[bool]:
+        """
+        Set the user-defined callback function to be called at the end of each successful increment.
+
+        Parameters
+        ----------
+        incrementCallback : callable, optional
+            The user-defined callback function. The callback function should have the following signature:
+            `callback(solver: BaseSolver, u: tacs.TACS.Vec, res: tacs.TACS.Vec, monitorVars: dict) -> Optional[bool]`
+            If the function returns True, the solver will terminate the solution, you can use this to implement your own
+            termination criteria.
+        """
+        self.incrementCallback = incrementCallback
 
     def getHistoryVariables(self) -> Dict[str, Dict]:
         """Get the variables to be stored in the solver history
@@ -306,6 +341,8 @@ class ArcLengthSolver(BaseSolver):
         MIN_STEP_FACTOR = self.getOption("MinStepFactor")
         MAX_STEP_FACTOR = self.getOption("MaxStepFactor")
         STEP_RETRACT_FACTOR = self.getOption("RetractionFactor")
+        MAX_RES = self.getOption("DivergenceTol")
+        USE_LIN_CONSTRAINT = self.getOption("UseLinearConstraint")
 
         # ABS_TOL = self.getOption("AbsTol")
         # REL_TOL = self.getOption("RelTol")
@@ -315,8 +352,6 @@ class ArcLengthSolver(BaseSolver):
         # USE_PREDICTOR = self.getOption("UsePredictor")
 
         self.initializeSolve(u0)
-
-        constraintType = "nonlinear"
         maxIter = 20
 
         u = self.stateVec
@@ -324,8 +359,6 @@ class ArcLengthSolver(BaseSolver):
         loadFactor = 0.0
         s = 0.0
         tol = 1e-9
-
-        eta = 0.0
 
         # Compute external force vector
         self.computeForceVectors()
@@ -336,6 +369,8 @@ class ArcLengthSolver(BaseSolver):
 
         ds = 0.0
 
+        flags = ""
+        finalIncrement = False
         for increment in range(MAX_INCREMENTS):
             self._iterationCount = increment
             self.prevIncStep.copyValues(self.du)
@@ -349,12 +384,15 @@ class ArcLengthSolver(BaseSolver):
             self.tangentStep.scale(-1.0)
             tangentNorm2 = self.tangentStep.norm() ** 2
 
+            # Interpret the user's eta value as how much the load factor change should be weighted in the first step arc-length relative to the displacement change
+            ETA = self.getOption("eta") * tangentNorm2
+
             # If this is the first increment, compute the initial arc length step size, interpret the user's input as the desired change in the load factor in the first increment
             if increment == 0:
-                ds = np.sqrt(INIT_STEP**2 * (eta + tangentNorm2))
-                dsMin = np.sqrt(MIN_STEP**2 * (eta + tangentNorm2))
-                dsMax = np.sqrt(MAX_STEP**2 * (eta + tangentNorm2))
-            dLoadFactor = ds / np.sqrt(eta + tangentNorm2)
+                ds = np.sqrt(INIT_STEP**2 * (ETA + tangentNorm2))
+                dsMin = np.sqrt(MIN_STEP**2 * (ETA + tangentNorm2))
+                dsMax = np.sqrt(MAX_STEP**2 * (ETA + tangentNorm2))
+            dLoadFactor = ds / np.sqrt(ETA + tangentNorm2)
 
             # Limit the load factor step size if we're predicted to go way past the maximum load factor
             if loadFactor + dLoadFactor > MAX_LAMBDA * 1.05:
@@ -378,6 +416,7 @@ class ArcLengthSolver(BaseSolver):
 
             # Now do a Newton solve to find the equilibrium state
             innerSolverConverged = False
+            innerSolverDiverged = False
             for innerIter in range(maxIter):
                 self.setStateFunc(u)
                 self.setLambdaFunc(loadFactor)
@@ -389,9 +428,22 @@ class ArcLengthSolver(BaseSolver):
 
                 # Compute the arc-length constraint g = sqrt(du^T du + eta dy^2) - ds
                 duNorm = self.du.norm()
-                radius = np.sqrt(duNorm**2 + eta * dy**2)
+                radius = np.sqrt(duNorm**2 + ETA * dy**2)
                 constraint = radius - ds
                 uNorm = u.norm()
+
+                # Check convergence/divergence
+                if USE_LIN_CONSTRAINT:
+                    innerSolverConverged = relResNorm < tol
+                else:
+                    innerSolverConverged = relResNorm < tol and np.abs(constraint) < tol
+
+                innerSolverDiverged = np.real(resNorm) >= MAX_RES or np.isnan(resNorm)
+
+                if innerSolverConverged:
+                    flags += "C"
+                elif innerSolverDiverged:
+                    flags += "D"
 
                 monitorVars = {
                     "Increment": increment,
@@ -403,31 +455,37 @@ class ArcLengthSolver(BaseSolver):
                     "U norm": uNorm,
                     "du norm": duNorm,
                     "dLambda": dy,
+                    "Flags": flags,
                 }
 
                 if self.rank == 0:
                     self.history.write(monitorVars)
 
-                if self.userCallback is not None:
-                    self.userCallback(self, self.stateVec, self.resVec, monitorVars)
+                if self.iterationCallback is not None:
+                    self.iterationCallback(
+                        self, self.stateVec, self.resVec, monitorVars
+                    )
+                flags = ""
 
-                if constraintType.lower() == "nonlinear":
-                    innerSolverConverged = relResNorm < tol and np.abs(constraint) < tol
-                elif constraintType.lower() == "linear":
-                    innerSolverConverged = relResNorm < tol
-                if innerSolverConverged:
+                if innerSolverConverged or innerSolverDiverged:
                     break
 
                 self.jacUpdateFunc()
                 self.pcUpdateFunc()
                 self.resVec.scale(-1.0)
 
-                if constraintType.lower() == "nonlinear":
+                if USE_LIN_CONSTRAINT:
+                    if innerIter == 0:
+                        self.dgdu.copyValues(self.tangentStep)
+                        self.pathMat.setConstraint(dLoadFactor)
+                    self.pathSolver.solve(self.resVec, self.update)
+                    loadScaleUpdate = self.pathMat.applyQ(self.update)
+                else:
                     self.dgdu.copyValues(
                         self.du
                     )  # ddu(sqrt(du^T du + eta dy^2) - ds) = du / sqrt(du^T du + eta dy^2)
                     self.dgdu.scale(1 / radius)
-                    dgdLambda = eta * dy / radius
+                    dgdLambda = ETA * dy / radius
                     self.pathMat.setConstraint(dgdLambda)
                     if constraint != 0:
                         tBarNorm2 = self.dgdu.norm() ** 2 + dgdLambda**2
@@ -441,21 +499,14 @@ class ArcLengthSolver(BaseSolver):
                     loadScaleUpdate = self.pathMat.applyQ(self.update)
                     self.update.axpy(a, self.dgdu)
                     loadScaleUpdate += a * dgdLambda
-                elif constraintType.lower() == "linear":
-                    if innerIter == 0:
-                        self.dgdu.copyValues(self.tangentStep)
-                        self.pathMat.setConstraint(dLoadFactor)
-                    self.pathSolver.solve(self.resVec, self.update)
-                    loadScaleUpdate = self.pathMat.applyQ(self.update)
 
                 # Limit any step that is bigger than the arc length constraint radius
                 alpha = 1.0
                 stepSize = alpha * np.sqrt(
-                    self.update.norm() ** 2 + eta * loadScaleUpdate**2
+                    self.update.norm() ** 2 + ETA * loadScaleUpdate**2
                 )
                 if stepSize > ds:
-                    if self.comm.rank == 0:
-                        print("Limiting step size")
+                    flags += "L"
                     alpha *= ds / stepSize
                 u.axpy(alpha, self.update)
                 loadFactor += alpha * loadScaleUpdate
@@ -482,22 +533,42 @@ class ArcLengthSolver(BaseSolver):
                 loadFactor = incStartLoadFactor
                 ds *= STEP_RETRACT_FACTOR
                 self.du.copyValues(self.prevIncStep)
+                flags += "R"
                 if self.comm.rank == 0:
                     print("Step rejected")
             else:
-                # self.writeSolution(outputDir=PWD, baseName=f"{fileName}", number=increment)
-                # self.writeSolution(baseName=f"{self.name}_{increment:04d}")
-                s += ds
-                ds *= np.clip(np.sqrt(TARGET_ITERS / (innerIter)), MIN_STEP_FACTOR, MAX_STEP_FACTOR)
-                ds = np.clip(ds, dsMin, dsMax)
-                # Save load factor and centre displacement to history
-                # results["zDisp"].append(getCentreDisp())
-                # results["loadScale"].append(loadFactor)
-
-                if abs(loadFactor) > MAX_LAMBDA:
+                # Before we take this step, we should check if it will take us past the maximum load factor. If it does,
+                # we should set the load factor to the maximum and then solve for the displacements at that load factor.
+                # We can generate a good initial guess for the displacements by interpolating the previous equilibrium
+                # states.
+                if loadFactor < MAX_LAMBDA:
+                    s += ds
+                    ds *= np.clip(
+                        np.sqrt(TARGET_ITERS / (innerIter)),
+                        MIN_STEP_FACTOR,
+                        MAX_STEP_FACTOR,
+                    )
+                    ds = np.clip(ds, dsMin, dsMax)
+                    if self.incrementCallback is not None:
+                        terminate = self.incrementCallback(self, u, self.resVec, monitorVars)
+                        if terminate:
+                            break
+                elif loadFactor > MAX_LAMBDA:
+                    self.incrementCallback(self, u, self.resVec, monitorVars)
                     break
+                    # TODO: Implement fixed load factor solve that relies on this code.
+                    fraction = (MAX_LAMBDA - incStartLoadFactor) / dy
+                    u.copyValues(self.incStartDisp)
+                    u.axpy(fraction, self.du)
+                    loadFactor = MAX_LAMBDA
+                    finalIncrement = True
 
-    def solveContinuationSystem(self, pathMat: tacs.TACS.ContinuationPathMat, rhsVec: tacs.TACS.Vec, rhsScalar: Optional[float]=None) -> None:
+    def solveContinuationSystem(
+        self,
+        pathMat: tacs.TACS.ContinuationPathMat,
+        rhsVec: tacs.TACS.Vec,
+        rhsScalar: Optional[float] = None,
+    ) -> None:
         """Solve a special type linear system that occurs in the arc-length continuation method:
 
         [ KT   | -Fex ] [ delta u ] = [ rhsVec ]
@@ -525,7 +596,6 @@ class ArcLengthSolver(BaseSolver):
         constraint : Optional[float], optional
             _description_, by default None
         """
-        # Build then solve the N+1 system matrix
 
     def computeForceVectors(self) -> None:
         """Compute the current forcing vector
