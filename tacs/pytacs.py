@@ -869,7 +869,6 @@ class pyTACS(BaseUI):
 
         # Evaluate r(2u) -  r(0)
         state.scale(2.0)
-        self.setBCsInVec(state)
         self.assembler.setVariables(state, state, state)
         self.assembler.assembleRes(res2)
         res2.axpy(-1.0, res0)
