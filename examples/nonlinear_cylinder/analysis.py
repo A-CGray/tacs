@@ -27,7 +27,7 @@ from mpi4py import MPI
 # ==============================================================================
 # Extension modules
 # ==============================================================================
-from tacs import pyTACS, constitutive, elements, TACS
+from tacs import pyTACS, constitutive, elements
 
 # ==============================================================================
 # Parse command line arguments
