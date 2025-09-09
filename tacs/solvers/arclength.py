@@ -39,8 +39,8 @@ class ArcLengthSolver(BaseSolver):
         ],
         "eta": [
             float,
-            0.0,
-            "Arc-length constraint parameter. Controls the weight of the load factor change in the arc-length constraint. The eta value given by the user is interpreted as the desired contribution of the load factor change to the arc-length of the first tangent step, relative to the displacement change. In other words, the weight, w, is chosen such that w*dLambda = eta * ||du||^2, where ||du|| is the norm of the displacement change in the first tangent step. eta=0 corresponds to the cylindrical arc-length method, eta->inf corresponds to pure load incrementation.",
+            0.5,
+            "Arc-length constraint parameter. Controls the weight of the load factor change in the arc-length constraint. The arc length constraint is ``sqrt((1-eta) * norm(du)^2 + eta * w * dLambda^2) - ds``, where `du` is the displacement change, `dLambda` is the load factor change, `ds` is the arc-length step size, and `w` is a scaling factor chosen such that norm(du)^2 = w * dLambda^2 for the initial tangent step. eta=0 corresponds to cylindrical arc-length control, where only the displacement change contributes to the arc-length, eta=1 corresponds to pure load incrementation, which will be unable to traverse unstable regions of the solution path.",
         ],
         "AbsTol": [
             float,
@@ -329,6 +329,18 @@ class ArcLengthSolver(BaseSolver):
                 self.equilibriumPathLengths[ii] = None
                 self.equilibriumPathStates[ii].zeroEntries()
 
+    @staticmethod
+    def computeArcLength(
+        duNorm: float, dy: float, eta: float, lambdaWeight: float
+    ) -> float:
+        return np.sqrt((1 - eta) * duNorm**2 + eta * lambdaWeight * dy**2)
+
+    # @staticmethod
+    # def computeArcLengthDispSens(
+    #     duNorm: float, dy: float, eta: float, lambdaWeight: float, dsdu: tacs.TACS.Vec
+    # ) -> None:
+
+
     def solve(
         self, u0: Optional[tacs.TACS.Vec] = None, result: Optional[tacs.TACS.Vec] = None
     ) -> None:
@@ -343,9 +355,14 @@ class ArcLengthSolver(BaseSolver):
         STEP_RETRACT_FACTOR = self.getOption("RetractionFactor")
         MAX_RES = self.getOption("DivergenceTol")
         USE_LIN_CONSTRAINT = self.getOption("UseLinearConstraint")
+        ETA = self.getOption("eta")
+        if ETA < 0 or ETA > 1:
+            raise ValueError(
+                "The arc-length parameter eta must be in the range [0, 1]."
+            )
 
-        # ABS_TOL = self.getOption("AbsTol")
-        # REL_TOL = self.getOption("RelTol")
+        ABS_TOL = self.getOption("AbsTol")
+        REL_TOL = self.getOption("RelTol")
         # COARSE_ABS_TOL = self.getOption("CoarseAbsTol")
         # COARSE_REL_TOL = self.getOption("CoarseRelTol")
 
@@ -358,7 +375,6 @@ class ArcLengthSolver(BaseSolver):
         self.incStartDisp.copyValues(u)
         loadFactor = 0.0
         s = 0.0
-        tol = 1e-9
 
         # Compute external force vector
         self.computeForceVectors()
@@ -371,6 +387,7 @@ class ArcLengthSolver(BaseSolver):
 
         flags = ""
         finalIncrement = False
+        lambdaWeight = 1.0
         for increment in range(MAX_INCREMENTS):
             self._iterationCount = increment
             self.prevIncStep.copyValues(self.du)
@@ -382,28 +399,35 @@ class ArcLengthSolver(BaseSolver):
             self.pcUpdateFunc()
             self.tangentSolver.solve(self.Fex, self.tangentStep)
             self.tangentStep.scale(-1.0)
-            tangentNorm2 = self.tangentStep.norm() ** 2
-
-            # Interpret the user's eta value as how much the load factor change should be weighted in the first step arc-length relative to the displacement change
-            ETA = self.getOption("eta") * tangentNorm2
+            tangentNorm = self.tangentStep.norm()
 
             # If this is the first increment, compute the initial arc length step size, interpret the user's input as the desired change in the load factor in the first increment
             if increment == 0:
-                ds = np.sqrt(INIT_STEP**2 * (ETA + tangentNorm2))
-                dsMin = np.sqrt(MIN_STEP**2 * (ETA + tangentNorm2))
-                dsMax = np.sqrt(MAX_STEP**2 * (ETA + tangentNorm2))
-            dLoadFactor = ds / np.sqrt(ETA + tangentNorm2)
+                # Choose a scaling factor for the load factor change such that for eta=0.5, the load factor and displacement change have equal contributions to the arc length
+                lambdaWeight = tangentNorm**2
+                tangentArcLength = self.computeArcLength(
+                    tangentNorm, 1.0, ETA, lambdaWeight
+                )
+                ds = INIT_STEP * tangentArcLength
+                dsMin = MIN_STEP * tangentArcLength
+                dsMax = MAX_STEP * tangentArcLength
+
+
+            tangentArcLength = self.computeArcLength(
+                tangentNorm, 1.0, ETA, lambdaWeight
+            )
+            dLoadFactor = ds/tangentArcLength
+
+            # Choose between the positive and negative roots of the constraint equation
+            if increment > 0:
+                if self.prevIncStep.dot(self.tangentStep) < 0:
+                    dLoadFactor *= -1
 
             # Limit the load factor step size if we're predicted to go way past the maximum load factor
             if loadFactor + dLoadFactor > MAX_LAMBDA * 1.05:
                 shrinkFactor = (MAX_LAMBDA * 1.05 - loadFactor) / dLoadFactor
                 dLoadFactor *= shrinkFactor
                 ds *= shrinkFactor
-
-            # Choose between the positive and negative roots of the constraint equation
-            if increment > 0:
-                if self.prevIncStep.dot(self.tangentStep) < 0:
-                    dLoadFactor *= -1
 
             # Take the tangent step
             loadFactor += dLoadFactor
@@ -428,15 +452,22 @@ class ArcLengthSolver(BaseSolver):
 
                 # Compute the arc-length constraint g = sqrt(du^T du + eta dy^2) - ds
                 duNorm = self.du.norm()
-                radius = np.sqrt(duNorm**2 + ETA * dy**2)
+                radius = self.computeArcLength(
+                    duNorm, dy, ETA, lambdaWeight
+                )
                 constraint = radius - ds
                 uNorm = u.norm()
 
+                relConstraintNorm = constraint/radius
+
+                resBelowTol = relResNorm < REL_TOL or resNorm < ABS_TOL
+                constraintBelowTol = np.abs(constraint) < ABS_TOL or relConstraintNorm < REL_TOL
+
                 # Check convergence/divergence
                 if USE_LIN_CONSTRAINT:
-                    innerSolverConverged = relResNorm < tol
+                    innerSolverConverged = resBelowTol
                 else:
-                    innerSolverConverged = relResNorm < tol and np.abs(constraint) < tol
+                    innerSolverConverged = resBelowTol and constraintBelowTol
 
                 innerSolverDiverged = np.real(resNorm) >= MAX_RES or np.isnan(resNorm)
 
@@ -483,9 +514,9 @@ class ArcLengthSolver(BaseSolver):
                 else:
                     self.dgdu.copyValues(
                         self.du
-                    )  # ddu(sqrt(du^T du + eta dy^2) - ds) = du / sqrt(du^T du + eta dy^2)
-                    self.dgdu.scale(1 / radius)
-                    dgdLambda = ETA * dy / radius
+                    )  # ddu(sqrt((1-eta) du^T du + eta w dy^2) - ds) = (1-eta) du / sqrt((1-eta) du^T du + eta w dy^2)
+                    self.dgdu.scale((1-ETA) / radius)
+                    dgdLambda = ETA * lambdaWeight * dy / radius
                     self.pathMat.setConstraint(dgdLambda)
                     if constraint != 0:
                         tBarNorm2 = self.dgdu.norm() ** 2 + dgdLambda**2
@@ -505,6 +536,7 @@ class ArcLengthSolver(BaseSolver):
                 stepSize = alpha * np.sqrt(
                     self.update.norm() ** 2 + ETA * loadScaleUpdate**2
                 )
+                # TODO: This step size limit breaks the solver in pure load increment mode, where the step size is not related to the displacement change. Fix this
                 if stepSize > ds:
                     flags += "L"
                     alpha *= ds / stepSize
@@ -550,11 +582,14 @@ class ArcLengthSolver(BaseSolver):
                     )
                     ds = np.clip(ds, dsMin, dsMax)
                     if self.incrementCallback is not None:
-                        terminate = self.incrementCallback(self, u, self.resVec, monitorVars)
+                        terminate = self.incrementCallback(
+                            self, u, self.resVec, monitorVars
+                        )
                         if terminate:
                             break
                 elif loadFactor > MAX_LAMBDA:
-                    self.incrementCallback(self, u, self.resVec, monitorVars)
+                    if self.incrementCallback is not None:
+                        self.incrementCallback(self, u, self.resVec, monitorVars)
                     break
                     # TODO: Implement fixed load factor solve that relies on this code.
                     fraction = (MAX_LAMBDA - incStartLoadFactor) / dy
