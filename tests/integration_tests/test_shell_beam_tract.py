@@ -1,6 +1,6 @@
 import numpy as np
 
-from static_analysis_base_test import StaticTestCase
+from static_analysis_base_test import StaticTestCase, getLocalCoords
 from tacs import TACS, elements, constitutive, functions
 
 """
@@ -9,7 +9,7 @@ and test KSFailure, StructuralMass, and Compliance functions and sensitivities
 """
 
 FUNC_REFS = np.array(
-    [0.6609184554371174, 2570.0, 106604.59992292787, 2.309258793136566]
+    [1.2294862035362253, 2.570000e03, 339081.9574176178, 4.178976222747089]
 )
 
 # Length of plate in x/y direction
@@ -36,7 +36,7 @@ class ProblemTest(StaticTestCase.StaticTest):
         """
 
         # Overwrite default check values
-        if dtype == complex:
+        if dtype is complex:
             self.rtol = 1e-8
             self.atol = 1e-8
             self.dh = 1e-50
@@ -130,12 +130,8 @@ class ProblemTest(StaticTestCase.StaticTest):
 
         # The nodes have been distributed across processors now
         # Let's find which nodes this processor owns
-        xpts0 = assembler.createNodeVec()
-        assembler.getNodes(xpts0)
-        xpts0_array = xpts0.getArray()
-        # Split node vector into numpy arrays for easier parsing of vectors
-        local_xyz = xpts0_array.reshape(local_num_nodes, 3)
-        local_x, local_y, local_z = local_xyz[:, 0], local_xyz[:, 1], local_xyz[:, 2]
+        local_xyz = getLocalCoords(assembler)
+        local_x = local_xyz[:, 0]
 
         # Don't need to modify force vector, since we already set traction
 

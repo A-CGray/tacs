@@ -11,7 +11,7 @@
 # ==============================================================================
 # Standard Python modules
 # ==============================================================================
-import os
+import unittest
 
 # ==============================================================================
 # External Python modules
@@ -21,6 +21,7 @@ from mphys.core import Multipoint
 from mphys.scenarios import ScenarioStructural
 from mphys.core import MPhysVariables
 
+from tacs import TACS
 import tacs.mphys
 from openmdao_analysis_base_test import OpenMDAOTestCase
 
@@ -37,6 +38,7 @@ from test_shell_hemisphere_nonlinear import (
     hemisphereProbRefFuncs,
 )
 
+TACS_IS_COMPLEX = TACS.dtype == complex
 
 # We need to rename the reference functions to match the names used in the TACS MPhys wrapper
 FUNC_REFS = {
@@ -55,7 +57,7 @@ class ProblemTest(OpenMDAOTestCase.OpenMDAOTest):
         """
 
         # Overwrite default tolerances
-        if dtype == complex:
+        if dtype is complex:
             self.rtol = 1e-7
             self.dh = 1e-200
         else:
@@ -115,8 +117,14 @@ class ProblemTest(OpenMDAOTestCase.OpenMDAOTest):
         """
         return FUNC_REFS, wrt
 
+    # Skip the derivative tests in real mode because the FD sensistivities for this problem are bad
+    @unittest.skipIf(
+        not TACS_IS_COMPLEX,
+        "Skipping total derivative checks in real mode, compile TACS in complex mode to run this test",
+    )
+    def test_totals(self):
+        super().test_totals()
+
 
 if __name__ == "__main__":
-    import unittest
-
     unittest.main()

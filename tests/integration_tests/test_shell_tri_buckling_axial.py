@@ -5,7 +5,7 @@ from tacs import pytacs, elements, constitutive
 
 """"
 The nominal case is a 4m x 3m flat plate under a buckling analysis. The
-perimeter of the plate is pinned and loaded in compression on its horizontal edges. 
+perimeter of the plate is pinned and loaded in compression on its horizontal edges.
 This tests the eigenvalues and eigenvalue sensitivities.
 
 This is the same case as test_shell_plate_buckling.py, except the elements are tris rather than quads.
@@ -20,11 +20,11 @@ class ProblemTest(PyTACSTestCase.PyTACSTest):
     N_PROCS = 2  # this is how many MPI processes to use for this TestCase.
 
     FUNC_REFS = {
-        "buckling_eigsb.0": 42.676815464069826,
-        "buckling_eigsb.1": 76.3687514552239,
-        "buckling_eigsb.2": 194.87563811119423,
-        "buckling_eigsb.3": 254.15031795163634,
-        "buckling_eigsb.4": 313.3413807104326,
+        "buckling_eigsb.0": 42.67681546424021,
+        "buckling_eigsb.1": 76.36875145541161,
+        "buckling_eigsb.2": 194.87563811035562,
+        "buckling_eigsb.3": 254.15031795073233,
+        "buckling_eigsb.4": 313.34138070985233,
     }
 
     def setup_tacs_problems(self, comm):

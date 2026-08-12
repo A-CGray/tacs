@@ -1,6 +1,6 @@
 import numpy as np
 
-from static_analysis_base_test import StaticTestCase
+from static_analysis_base_test import StaticTestCase, getLocalCoords
 from tacs import TACS, elements, constitutive, functions
 
 """
@@ -8,9 +8,7 @@ Create a cantilevered beam of linear triangular shells under a uniform pressure
 and test KSFailure, StructuralMass, and Compliance functions and sensitivities
 """
 
-FUNC_REFS = np.array(
-    [35.48511406663365, 2570.0, 206968113.43479252, 101.58091514680623]
-)
+FUNC_REFS = np.array([3.54851139e01, 2.57000000e03, 2.06968111e08, 1.01580915e02])
 
 # Length of plate in x/y direction
 Lx = 10.0
@@ -36,7 +34,7 @@ class ProblemTest(StaticTestCase.StaticTest):
         """
 
         # Overwrite default check values
-        if dtype == complex:
+        if dtype is complex:
             self.rtol = 5e-8
             self.dh = 1e-50
         else:
@@ -130,17 +128,8 @@ class ProblemTest(StaticTestCase.StaticTest):
 
         # The nodes have been distributed across processors now
         # Let's find which nodes this processor owns
-        xpts0 = assembler.createNodeVec()
-        assembler.getNodes(xpts0)
-        xpts0_array = xpts0.getArray()
-        # Split node vector into numpy arrays for easier parsing of vectors
-        local_xyz = xpts0_array.reshape(local_num_nodes, 3)
-        local_x, local_y, local_z = local_xyz[:, 0], local_xyz[:, 1], local_xyz[:, 2]
-
-        # Create force vector
-        f_array = force_vec.getArray().reshape(local_num_nodes, vars_per_node)
-
-        # Don't need to modify force vector, since we already set pressure
+        local_xyz = getLocalCoords(assembler)
+        local_x = local_xyz[:, 0]
 
         # Create temporary dv vec for doing fd/cs
         dv_pert_array = dv_pert_vec.getArray()

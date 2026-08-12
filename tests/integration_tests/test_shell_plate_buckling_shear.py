@@ -8,7 +8,7 @@ complex_mode = TACS.dtype == complex
 
 """"
 The nominal case is a 1m x 0.7m flat plate under a buckling analysis. The
-perimeter of the plate is clamped and loaded in shear on its horizontal edges. 
+perimeter of the plate is clamped and loaded in shear on its horizontal edges.
 This tests the eigenvalues and eigenvalue sensitivities.
 This analysis was verified against Abaqus and closed-form solution with a finer mesh.
     However, this test is scaled down to a 5x5 mesh to make sure the analysis result is identical.
@@ -22,11 +22,11 @@ class ProblemTest(PyTACSTestCase.PyTACSTest):
     N_PROCS = 2  # this is how many MPI processes to use for this TestCase.
 
     FUNC_REFS = {
-        "buckling_eigsb.0": -170.74198051427817,
-        "buckling_eigsb.1": 170.7419805143329,
-        "buckling_eigsb.2": 199.91780267055614,
-        "buckling_eigsb.3": -199.91780267064914,
-        "buckling_eigsb.4": -377.1783008654174,
+        "buckling_eigsb.0": 170.74198051440797,
+        "buckling_eigsb.1": -170.74198051440897,
+        "buckling_eigsb.2": -199.91780267024808,
+        "buckling_eigsb.3": 199.91780267025348,
+        "buckling_eigsb.4": 377.1783008802441,
     }
 
     def setup_tacs_problems(self, comm):

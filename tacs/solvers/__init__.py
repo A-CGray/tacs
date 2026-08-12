@@ -6,4 +6,4 @@ from .continuation import ContinuationSolver
 
 from .arclength import ArcLengthSolver
 
-__all__ = ["newton", "continuation", "arclength"]
+__all__ = ["BaseSolver", "NewtonSolver", "ContinuationSolver", "ArcLengthSolver"]

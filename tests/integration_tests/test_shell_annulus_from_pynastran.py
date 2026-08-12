@@ -7,7 +7,7 @@ from tacs import pytacs, functions
 """
 Create annulus out of shell elements using pyNASTRAN's BDF class.
 We then use this class object to initialize pyTACS rather than reading in a file.
-Apply a load at the spider-webbed RBE2 centered inside the annulus and test KSFailure, StructuralMass, 
+Apply a load at the spider-webbed RBE2 centered inside the annulus and test KSFailure, StructuralMass,
 Moment of Inertia, and Compliance functions and sensitivities.
 """
 
@@ -36,10 +36,10 @@ class ProblemTest(PyTACSTestCase.PyTACSTest):
     N_PROCS = 2  # this is how many MPI processes to use for this TestCase.
 
     FUNC_REFS = {
-        "center_moment_Izz": 174.1393226319456,
-        "center_moment_compliance": 2047161.6725086374,
-        "center_moment_ks_vmfailure": 15.179071361242388,
-        "center_moment_mass": 297.56628397306457,
+        "center_moment_Izz": 174.13932263194562,
+        "center_moment_compliance": 2047161.6725085843,
+        "center_moment_ks_vmfailure": 15.17907136124217,
+        "center_moment_mass": 297.5662839730646,
     }
 
     def setup_tacs_problems(self, comm):

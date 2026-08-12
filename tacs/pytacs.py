@@ -500,7 +500,10 @@ class pyTACS(BaseUI):
 
             # This will select upper skin components between the
             # leading and trailing edge spars and between ribs 1 and 4.
-            selectCompIDs(include="U_SKIN", includeBound=["LE_SPAR", "TE_SPAR", "RIB.01", "RIB.04"])
+            selectCompIDs(
+                include="U_SKIN",
+                includeBound=["LE_SPAR", "TE_SPAR", "RIB.01", "RIB.04"],
+            )
 
         4. nGroup: The number of groups to divide the found components
         into.
@@ -922,6 +925,11 @@ class pyTACS(BaseUI):
         def matCallBack(matInfo):
             # Nastran isotropic material card
             if matInfo.type == "MAT1":
+                if matInfo.St == 0:
+                    self._TACSWarning(
+                        f"MAT1 card {matInfo.mid} has a zero tensile strength, check St. "
+                        "Otherwise the failure criterion is undefined or infinity."
+                    )
                 mat = tacs.constitutive.MaterialProperties(
                     rho=matInfo.rho,
                     E=matInfo.e,
@@ -951,7 +959,7 @@ class pyTACS(BaseUI):
 
                 if S12 == 0 or Xt == 0 or Xc == 0 or Yt == 0 or Yc == 0:
                     self._TACSWarning(
-                        f"MAT8 card {matInfo.mid} has a zero strength, check Xc, Xt, Yc, Yt, and S12."
+                        f"MAT8 card {matInfo.mid} has a zero strength, check Xc, Xt, Yc, Yt, and S12. "
                         "Otherwise Tsai-Wu Failure criterion is undefined or infinity."
                     )
 
@@ -1038,7 +1046,6 @@ class pyTACS(BaseUI):
                     tNum = elemDict[propertyID]["dvs"]["T"].dvids[0] - 1
                     minThickness = elemDict[propertyID]["dvs"]["T"].dvids_ref[0].xlb
                     maxThickness = elemDict[propertyID]["dvs"]["T"].dvids_ref[0].xub
-                    name = elemDict[propertyID]["dvs"]["T"].dvids_ref[0].label
                     self.scaleList[tNum - 1] = elemDict[propertyID]["dvs"]["T"].coeffs[
                         0
                     ]
@@ -1059,7 +1066,12 @@ class pyTACS(BaseUI):
                     )
 
                 con = tacs.constitutive.IsoShellConstitutive(
-                    mat, t=thickness, tlb=minThickness, tub=maxThickness, tNum=tNum
+                    mat,
+                    t=thickness,
+                    tlb=minThickness,
+                    tub=maxThickness,
+                    tNum=tNum,
+                    kcorr=kcorr,
                 )
 
             elif propInfo.type == "PCOMP":  # Nastran composite shell
@@ -1117,7 +1129,6 @@ class pyTACS(BaseUI):
                     tNum = elemDict[propertyID]["dvs"]["T"].dvids[0] - 1
                     minThickness = elemDict[propertyID]["dvs"]["T"].dvids_ref[0].xlb
                     maxThickness = elemDict[propertyID]["dvs"]["T"].dvids_ref[0].xub
-                    name = elemDict[propertyID]["dvs"]["T"].dvids_ref[0].label
                     self.scaleList[tNum - 1] = elemDict[propertyID]["dvs"]["T"].coeffs[
                         0
                     ]
@@ -1301,7 +1312,7 @@ class pyTACS(BaseUI):
     @postinitialize_method
     def getOrigDesignVars(self):
         """
-        get the original design variables that were specified with
+        Get the original design variables that were specified with
         during assembler creation.
 
         Returns
@@ -1315,7 +1326,7 @@ class pyTACS(BaseUI):
     @postinitialize_method
     def getDesignVarRange(self):
         """
-        get the lower/upper bounds for the design variables.
+        Get the lower/upper bounds for the design variables.
 
         Returns
         -------
@@ -1767,7 +1778,7 @@ class pyTACS(BaseUI):
                 if "DLOAD" in subCase:
                     dloadsID = subCase["DLOAD"][0]
                     dloadSet, dloadScale = self.bdfInfo.get_reduced_dloads(dloadsID)
-                    for dloadInfo, dscale in zip(dloadSet, dloadScale):
+                    for dloadInfo, dscale in zip(dloadSet, dloadScale, strict=True):
                         timeSteps = problem.getTimeSteps()
                         if dloadInfo.type in ["TLOAD1", "TLOAD2"]:
                             if dloadInfo.type == "TLOAD1":
@@ -1839,7 +1850,7 @@ class pyTACS(BaseUI):
             Scale factor for time, by default 1.0
         """
         # Make sure problems is in a list
-        if hasattr(problems, "__iter__") == False:
+        if not hasattr(problems, "__iter__"):
             problems = [problems]
         elif isinstance(problems, dict):
             problems = list(problems.values())
@@ -2209,7 +2220,7 @@ class pyTACS(BaseUI):
             Class-specific options to pass to PanelLengthConstraint instance (case-insensitive).
 
         Returns
-        ----------
+        -------
         constraint : tacs.constraints.PanelLengthConstraint
             PanelLengthConstraint object used for calculating constraints.
         """
@@ -2239,7 +2250,7 @@ class pyTACS(BaseUI):
             Class-specific options to pass to PanelWidthConstraint instance (case-insensitive).
 
         Returns
-        ----------
+        -------
         constraint : tacs.constraints.{PanelWidthConstraint}
             PanelWidthConstraint object used for calculating constraints.
         """
@@ -2269,7 +2280,7 @@ class pyTACS(BaseUI):
             Class-specific options to pass to StiffenerLengthConstraint instance (case-insensitive).
 
         Returns
-        ----------
+        -------
         constraint : tacs.constraints.StiffenerLengthConstraint
             StiffenerLengthConstraint object used for calculating constraints.
         """
@@ -2370,7 +2381,8 @@ class pyTACS(BaseUI):
 
     def _createOutputGroups(self):
         """Automatically determine how to split out the output file
-        for easier viewing"""
+        for easier viewing
+        """
 
         self.fam = []
         for i in range(self.nComp):
@@ -2433,7 +2445,8 @@ class pyTACS(BaseUI):
 
     def _getCompIDs(self, op, *inList):
         """Internal method to return the component IDs mathing
-        information in inList"""
+        information in inList
+        """
 
         # First recursively flatten the inList in case it was nested:
         inList = self._flatten(inList)

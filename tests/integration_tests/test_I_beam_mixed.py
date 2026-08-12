@@ -10,7 +10,7 @@ This model tests an I-beam made up of two different element types:
 The properties of the cross-section are given below:
     Acaps = 0.05
     tweb = 0.1
-We apply apply various tip loads test KSDisplacement, KSFailure, 
+We apply apply various tip loads test KSDisplacement, KSFailure,
 StructuralMass, and Compliance functions and sensitivities.
 
 NOTE: Design variables are read in from BDF file.
@@ -26,11 +26,11 @@ class ProblemTest(PyTACSTestCase.PyTACSTest):
     N_PROCS = 2  # this is how many MPI processes to use for this TestCase.
 
     FUNC_REFS = {
-        "load_set_000_compliance": 100430.19372545928,
-        "load_set_000_ks_vmfailure": 0.4486594909084844,
+        "load_set_000_compliance": 145232.29574826022,
+        "load_set_000_ks_vmfailure": 0.4918936803754227,
         "load_set_000_mass": 5400.0,
-        "load_set_000_x_disp": 0.3558707399683029,
-        "load_set_000_y_disp": 1.2614949438778236,
+        "load_set_000_x_disp": 0.3625439359346717,
+        "load_set_000_y_disp": 1.4880704288941529,
         "load_set_000_z_disp": 0.34011973816621555,
     }
 

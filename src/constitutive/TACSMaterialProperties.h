@@ -161,11 +161,11 @@ class TACSMaterialProperties : public TACSObject {
   or a smoothed maximum strain failure criterion, where the smoothing
   is performed using a KS function.
 
-  The interaction coefficient for the Tsai-Wu failure criterion is set
-  to zero by default. If a value of C, the failure stress under
-  combined in-plane loading, is supplied, the interaction coefficient
-  is determined. Be careful - the value can easily fall outside
-  acceptable bounds - these are tested during initialization.
+  The interaction coefficient F12 for the Tsai-Wu failure criterion is set
+  to zero for orthotropic materials, matching the default of the Nastran
+  MAT8 card. For isotropic materials it is set to -0.5*sqrt(F11*F22), which
+  makes the criterion equivalent to von Mises. See
+  docs/source/theory/failure_criteria.rst for the derivation.
 */
 class TACSOrthotropicPly : public TACSObject {
  public:
@@ -174,7 +174,7 @@ class TACSOrthotropicPly : public TACSObject {
   TACSOrthotropicPly(TacsScalar _plyThickness,
                      TACSMaterialProperties *_properties);
 
-  enum FailureCriterion {
+  enum CompositeFailureCriterion {
     MAX_STRAIN,        // Smoothed max-strain criterion (KS)
     TSAI_WU,           // Standard Tsai-Wu failure index
     TSAI_WU_MODIFIED,  // Modified Tsai-Wu returning a strength ratio (default)
@@ -183,11 +183,9 @@ class TACSOrthotropicPly : public TACSObject {
   };
 
   void setKSWeight(TacsScalar _ksWeight);
-  void setUseMaxStrainCriterion();
-  void setUseTsaiWuCriterion();
-  void setUseModifiedTsaiWuCriterion();
-  void setUseCuntzeCriterion_UD();
-  void setUseCuntzeCriterion_Woven();
+  void setFailureCriterion(CompositeFailureCriterion fc) {
+    failureCriterion = fc;
+  }
 
   // Retrieve the material properties
   // --------------------------------
@@ -307,7 +305,7 @@ class TACSOrthotropicPly : public TACSObject {
   TacsScalar G12, G23, G13;
 
   // Keep track of which failure criterion to use
-  FailureCriterion failureCriterion;
+  CompositeFailureCriterion failureCriterion;
 
   // The stress-based strength properties
   TacsScalar Xt, Xc;

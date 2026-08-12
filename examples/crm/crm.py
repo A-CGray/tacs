@@ -3,7 +3,6 @@
 # tacs assembler directly as opposed to using the pyTACS user interface (see analysis.py):
 # loading a mesh, creating elements, evaluating functions, solution, and output
 # Import necessary libraries
-import numpy as np
 import os
 from mpi4py import MPI
 from tacs import TACS, elements, constitutive, functions
@@ -32,7 +31,7 @@ for i in range(num_components):
     prop = constitutive.MaterialProperties(rho=rho, E=E, nu=nu, ys=ys)
     # Set one thickness dv for every component
     stiff = constitutive.IsoShellConstitutive(
-        prop, t=thickness, tMin=min_thickness, tMax=max_thickness, tNum=i
+        prop, t=thickness, tlb=min_thickness, tub=max_thickness, tNum=i
     )
 
     element = None

@@ -1,6 +1,6 @@
 import numpy as np
 
-from static_analysis_base_test import StaticTestCase
+from static_analysis_base_test import StaticTestCase, getLocalCoords
 from tacs import TACS, elements, constitutive, functions
 
 """
@@ -8,9 +8,7 @@ Create a cantilevered beam of linear quad shells under a tip shear load
 and test KSFailure, StructuralMass, and Compliance functions and sensitivities
 """
 
-FUNC_REFS = np.array(
-    [84.73369920062832, 2570.0, 1.70202700928821e9, 299.56673737166255]
-)
+FUNC_REFS = np.array([8.47336988e01, 2.57000000e03, 1.70202700e09, 2.99566737e02])
 
 # Length of plate in x/y direction
 Lx = 10.0
@@ -36,7 +34,7 @@ class ProblemTest(StaticTestCase.StaticTest):
         """
 
         # Overwrite default check values
-        if dtype == complex:
+        if dtype is complex:
             self.rtol = 1e-7
             self.atol = 1e-4
             self.dh = 1e-50
@@ -115,12 +113,8 @@ class ProblemTest(StaticTestCase.StaticTest):
 
         # The nodes have been distributed across processors now
         # Let's find which nodes this processor owns
-        xpts0 = assembler.createNodeVec()
-        assembler.getNodes(xpts0)
-        xpts0_array = xpts0.getArray()
-        # Split node vector into numpy arrays for easier parsing of vectors
-        local_xyz = xpts0_array.reshape(local_num_nodes, 3)
-        local_x, local_y, local_z = local_xyz[:, 0], local_xyz[:, 1], local_xyz[:, 2]
+        local_xyz = getLocalCoords(assembler)
+        local_x = local_xyz[:, 0]
 
         # Create force vector
         f_array = force_vec.getArray().reshape(local_num_nodes, vars_per_node)

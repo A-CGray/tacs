@@ -5,10 +5,10 @@ from tacs import pytacs, constitutive, elements, functions
 
 r"""
 Load a  structural model featuring two separate cantilevered plates connected by an RBE2 element.
-Apply a load at the RBE2 center node and test KSFailure, StructuralMass, 
-and Compliance functions and sensitivities. This is similar to test_shell_plate_rbe2.py, 
+Apply a load at the RBE2 center node and test KSFailure, StructuralMass,
+and Compliance functions and sensitivities. This is similar to test_shell_plate_rbe2.py,
 except it is run through the pytacs interface.
------------        ----------- 
+-----------        -----------
 |          |\    /|          |
 |          | \  / |          |
 | Plate 1  |__\/__| Plate 2  |
@@ -28,9 +28,9 @@ class ProblemTest(PyTACSTestCase.PyTACSTest):
     N_PROCS = 2  # this is how many MPI processes to use for this TestCase.
 
     FUNC_REFS = {
-        "load_set_001_compliance": 1308894.9194463675,
-        "load_set_001_ks_disp": 0.9935838935725351,
-        "load_set_001_ks_vmfailure": 0.895419273597867,
+        "load_set_001_compliance": 1326583.7019170627,
+        "load_set_001_ks_disp": 0.9936432954172314,
+        "load_set_001_ks_vmfailure": 0.8976374834764311,
         "load_set_001_mass": 51400.0,
     }
 
